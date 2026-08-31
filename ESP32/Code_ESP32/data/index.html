@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ESP32 OS Trackpad</title>
+    <style>
+        :root {
+            --bg-color: #e0e5ec;
+            --text-color: #4a5568;
+            --shadow-light: #ffffff;
+            --shadow-dark: #a3b1c6;
+            --accent: #3b82f6;
+        }
+
+        * { box-sizing: border-box; }
+
+        body, html {
+            margin: 0; padding: 0; width: 100%; height: 100%;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            user-select: none;
+            -webkit-user-select: none;
+            display: flex; flex-direction: column;
+        }
+        
+        #header {
+            flex-shrink: 0;
+            text-align: center; padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; 
+            font-size: 18px; font-weight: bold; 
+            letter-spacing: 1px;
+            color: var(--text-color);
+            border-bottom: 1px solid rgba(0,0,0,0.05);
+            background: var(--bg-color);
+            z-index: 10;
+        }
+        
+        #status { font-size: 12px; color: #718096; font-weight: normal; margin-left: 10px; }
+
+        .content-scrollable {
+            flex: 1;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+            padding: 20px;
+            display: flex; flex-direction: column;
+            gap: 25px;
+        }
+        
+        .card {
+            border-radius: 20px;
+            background: var(--bg-color);
+            box-shadow: 
+                6px 6px 12px var(--shadow-dark), 
+                -6px -6px 12px var(--shadow-light);
+            padding: 20px;
+        }
+
+        .trackpad-card {
+            padding: 0;
+            display: flex; justify-content: center; align-items: center;
+            height: 300px;
+            flex-shrink: 0;
+            box-shadow: 
+                inset 6px 6px 12px var(--shadow-dark), 
+                inset -6px -6px 12px var(--shadow-light);
+            position: relative;
+            touch-action: none;
+        }
+        
+        #trackpad-hint {
+            color: rgba(74, 85, 104, 0.2);
+            font-size: 32px; font-weight: bold;
+            pointer-events: none;
+            letter-spacing: 2px;
+        }
+        
+        .buttons-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            padding: 5px;
+        }
+        
+        .btn {
+            background: var(--bg-color);
+            border-radius: 16px;
+            color: var(--text-color); 
+            font-size: 16px; font-weight: bold;
+            height: 65px;
+            display: flex; justify-content: center; align-items: center;
+            cursor: pointer;
+            box-shadow: 
+                6px 6px 12px var(--shadow-dark), 
+                -6px -6px 12px var(--shadow-light);
+            transition: all 0.1s ease;
+        }
+
+        .btn.full-width {
+            grid-column: span 2;
+        }
+
+        .btn.btn-colored {
+            color: white;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.1);
+        }
+        
+        .btn:active {
+            box-shadow: 
+                inset 4px 4px 8px var(--shadow-dark), 
+                inset -4px -4px 8px var(--shadow-light);
+            color: var(--accent);
+        }
+        
+        .chart-container {
+            width: 100%; height: 220px;
+            display: flex; justify-content: center; align-items: center;
+            padding: 10px;
+            flex-shrink: 0;
+        }
+    
+        /* Settings Modal */
+        .modal {
+            display: none; position: fixed; z-index: 100;
+            left: 0; top: 0; width: 100%; height: 100%;
+            background-color: rgba(0,0,0,0.5);
+            justify-content: center; align-items: center;
+        }
+        .modal-content {
+            background-color: var(--bg-color);
+            padding: 20px; border-radius: 20px;
+            width: 90%; max-width: 400px;
+            box-shadow: 6px 6px 12px var(--shadow-dark), -6px -6px 12px var(--shadow-light);
+        }
+        .modal-header { font-size: 20px; font-weight: bold; margin-bottom: 20px; text-align: center;}
+        .setting-item {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 15px; padding-bottom: 15px; border-bottom: 1px solid rgba(0,0,0,0.05);
+        }
+        .switch { position: relative; display: inline-block; width: 50px; height: 26px; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider {
+            position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+            background-color: #ccc; transition: .4s; border-radius: 26px;
+        }
+        .slider:before {
+            position: absolute; content: ""; height: 20px; width: 20px;
+            left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%;
+        }
+        input:checked + .slider { background-color: var(--accent); }
+        input:checked + .slider:before { transform: translateX(24px); }
+        .close-btn {
+            background: var(--accent); color: white; border: none; padding: 10px;
+            width: 100%; border-radius: 10px; font-size: 16px; margin-top: 10px; cursor: pointer;
+        }
+    
+        .dropdown { position: relative; display: inline-block; }
+        .dropbtn { background-color: #3b82f6; color: white; padding: 8px 12px; font-size: 14px; border: none; border-radius: 6px; cursor: pointer; box-shadow: 0 4px 6px rgba(0,0,0,0.3); font-weight: bold; }
+        .dropdown-content { display: none; position: absolute; right: 0; background-color: #1e293b; min-width: 160px; box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.5); z-index: 100; border-radius: 8px; overflow: auto; margin-top: 5px; }
+        .dropdown-content a { color: white; padding: 12px 16px; text-decoration: none; display: block; font-weight: bold; border-bottom: 1px solid #334155; font-size: 14px; }
+        .dropdown-content a:hover { background-color: #334155; }
+        .show { display: block; }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div id="header">
+        <div style="text-align: left;">
+            <div>SMART OS <span id="status">🔴 Chờ kết nối...</span></div>
+            <div id="ram-info" style="font-size: 13px; font-weight: normal; color: var(--accent); margin-top: 5px;">RAM: Đang tải...</div>
+        </div>
+        <div class="dropdown">
+            <button onclick="document.getElementById('myDropdown').classList.toggle('show')" class="dropbtn">☰ Menu</button>
+            <div id="myDropdown" class="dropdown-content">
+                <a href="#" onclick="openSettings()">⚙️ Cài Đặt</a>
+                <a href="#" onclick="document.getElementById('terminal-modal').style.display='flex'">💻 Terminal</a>
+                <a href="#" onclick="openFM()">📁 File Manager</a>
+            </div>
+        </div>
+    </div>
+    
+    <main class="content-scrollable">
+        <div id="trackpad" class="card trackpad-card">
+            <span id="trackpad-hint">TRACKPAD</span>
+        </div>
+
+        <div class="buttons-grid">
+            <div class="btn" id="btn-click">CLICK</div>
+            <div class="btn" id="btn-back">BACK</div>
+            <div class="btn full-width" id="btn-wp">W.PAPER</div>
+            <div class="btn btn-colored" id="btn-r1" style="background: #eab308;">ĐÈN (R1)</div>
+            <div class="btn btn-colored" id="btn-r2" style="background: #9ca3af;">R2 (TRỐNG)</div>
+        </div>
+
+        <div class="card" id="weather-card" style="margin-bottom: 15px; font-size: 14px;">
+            <div style="font-weight: bold; margin-bottom: 5px; color: var(--accent);">🌤 Thời tiết & AI Dự báo</div>
+            <div id="weather-info">Đang tải dữ liệu...</div>
+        </div>
+
+        <div class="card chart-container">
+            <canvas id="dataChart"></canvas>
+        </div>
+        
+        <input type="file" id="file-input" accept="image/*" style="display: none;">
+    </main>
+
+    <script>
+        let ws;
+        const statusEl = document.getElementById('status');
+        const trackpad = document.getElementById('trackpad');
+        const btnClick = document.getElementById('btn-click');
+        const btnBack = document.getElementById('btn-back');
+
+        function triggerHaptic(duration = 15) {
+            if (navigator.vibrate) {
+                navigator.vibrate(duration);
+            }
+        }
+
+        function connectWs() {
+            const gateway = `ws://${window.location.hostname}/ws`;
+            ws = new WebSocket(gateway);
+            
+            ws.onopen = () => { statusEl.innerText = "🟢 Đã kết nối"; };
+            ws.onclose = () => { statusEl.innerText = "🔴 Mất kết nối"; setTimeout(connectWs, 2000); };
+            ws.onerror = () => { statusEl.innerText = "⚠️ Lỗi WS"; };
+
+            ws.onmessage = (e) => { 
+                try {
+                    const d = JSON.parse(e.data);
+                    if (d.type === 'log') {
+                        const term = document.getElementById('terminal-output');
+                        if (term) {
+                            term.innerHTML += `<div><span style="color:#888">[${new Date().toLocaleTimeString()}]</span> ${d.msg}</div>`;
+                            term.scrollTop = term.scrollHeight;
+                        }
+                    }
+                } catch(err) {}
+            };
+
+        }
+
+        let lastX = 0, lastY = 0;
+        let isTouching = false;
+
+        trackpad.addEventListener('touchstart', (e) => {
+            isTouching = true;
+            lastX = e.touches[0].clientX;
+            lastY = e.touches[0].clientY;
+        });
+
+        trackpad.addEventListener('touchmove', (e) => {
+            if (!isTouching || ws.readyState !== WebSocket.OPEN) return;
+            
+            let curX = e.touches[0].clientX;
+            let curY = e.touches[0].clientY;
+            
+            let dx = (curX - lastX) / 1.5;
+            let dy = (curY - lastY) / 1.5;
+            
+            if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
+                ws.send(JSON.stringify({ type: "move", dx: dx, dy: dy }));
+                lastX = curX;
+                lastY = curY;
+            }
+        });
+
+        trackpad.addEventListener('touchend', () => { isTouching = false; });
+        trackpad.addEventListener('touchcancel', () => { isTouching = false; });
+
+        btnClick.addEventListener('click', (e) => { 
+            triggerHaptic(20);
+            if(ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "click" }));
+        });
+        
+        btnBack.addEventListener('click', (e) => { 
+            triggerHaptic(20);
+            if(ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "back" }));
+        });
+
+        document.getElementById('btn-r1').addEventListener('click', (e) => { 
+            triggerHaptic(20);
+            if(ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "relay", relay: 1 }));
+        });
+        document.getElementById('btn-r2').addEventListener('click', (e) => { 
+            triggerHaptic(20);
+            if(ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "relay", relay: 2 }));
+        });
+
+        // Fallback for PC
+        let isMouseDown = false;
+        trackpad.addEventListener('mousedown', (e) => {
+            isMouseDown = true;
+            lastX = e.clientX; lastY = e.clientY;
+        });
+        trackpad.addEventListener('mousemove', (e) => {
+            if (!isMouseDown || ws.readyState !== WebSocket.OPEN) return;
+            let dx = (e.clientX - lastX) / 1.5; let dy = (e.clientY - lastY) / 1.5;
+            if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
+                ws.send(JSON.stringify({ type: "move", dx: dx, dy: dy }));
+                lastX = e.clientX; lastY = e.clientY;
+            }
+        });
+        trackpad.addEventListener('mouseup', () => { isMouseDown = false; });
+        trackpad.addEventListener('mouseleave', () => { isMouseDown = false; });
+        
+        // Wallpaper Upload Logic
+        const btnWp = document.getElementById('btn-wp');
+        const fileInput = document.getElementById('file-input');
+        
+        btnWp.addEventListener('click', () => {
+            fileInput.click();
+        });
+        
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            statusEl.innerText = "⏳ Đang xử lý ảnh...";
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                const img = new Image();
+                img.onload = () => {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = 160;
+                    canvas.height = 128;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0, 160, 128);
+                    
+                    const imageData = ctx.getImageData(0, 0, 160, 128);
+                    const pixels = imageData.data;
+                    const buffer = new ArrayBuffer(160 * 128 * 2);
+                    const view = new DataView(buffer);
+                    
+                    let j = 0;
+                    for (let i = 0; i < pixels.length; i += 4) {
+                        const r = pixels[i] >> 3;
+                        const g = pixels[i+1] >> 2;
+                        const b = pixels[i+2] >> 3;
+                        const rgb565 = (r << 11) | (g << 5) | b;
+                        // Little-endian
+                        view.setUint16(j, rgb565, true);
+                        j += 2;
+                    }
+                    
+                    statusEl.innerText = "🚀 Đang gửi ảnh...";
+                    fetch('/upload_bg', {
+                        method: 'POST',
+                        body: buffer,
+                        headers: {
+                            'Content-Type': 'application/octet-stream'
+                        }
+                    }).then(res => {
+                        if (res.ok) statusEl.innerText = "✅ Đổi hình nền thành công!";
+                        else statusEl.innerText = "❌ Lỗi khi gửi ảnh";
+                    }).catch(err => {
+                        statusEl.innerText = "❌ Lỗi kết nối";
+                    });
+                };
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        });
+
+        
+        // Settings Logic
+        function openSettings() {
+            document.getElementById('settings-modal').style.display = 'flex';
+            fetch('/api/settings').then(r=>r.json()).then(d=>{
+                document.getElementById('chk-logCsv').checked = d.logCsv;
+                document.getElementById('chk-ota').checked = d.ota;
+                document.getElementById('chk-audio').checked = d.audio;
+                document.getElementById('chk-popup').checked = d.popup;
+            });
+        }
+        
+
+
+        
+        // File Manager Logic
+        function openFM() {
+            document.getElementById('fm-modal').style.display = 'flex';
+            loadFiles();
+        }
+        function loadFiles() {
+            fetch('/api/fs').then(r=>r.json()).then(d=>{
+                const tbody = document.getElementById('fm-tbody');
+                if(!tbody) return;
+                tbody.innerHTML = '';
+                d.files.forEach(f => {
+                    const sizeKB = (f.size / 1024).toFixed(2);
+                    tbody.innerHTML += `<tr style="border-bottom: 1px solid #eee;">
+                        <td style="padding: 10px; color: #333;">${f.name}</td>
+                        <td style="padding: 10px; color: #333;">${sizeKB} KB</td>
+                        <td style="padding: 10px;">
+                            <a href="${f.name}" download style="background: #10b981; color: #fff; padding: 5px 10px; text-decoration: none; border-radius: 4px; margin-right: 5px; font-size: 14px;">Tải</a>
+                            <button onclick="deleteFile('${f.name}')" style="background: #ef4444; color: #fff; padding: 5px 10px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px;">Xóa</button>
+                        </td>
+                    </tr>`;
+                });
+            });
+        }
+        function deleteFile(name) {
+            if(confirm('Chắc chắn xóa ' + name + '?')) {
+                fetch('/api/fs/delete', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({filename: name})
+                }).then(() => loadFiles());
+            }
+        }
+
+        
+        window.onclick = function(event) {
+            if (!event.target.matches('.dropbtn')) {
+                var dropdowns = document.getElementsByClassName("dropdown-content");
+                for (var i = 0; i < dropdowns.length; i++) {
+                    var openDropdown = dropdowns[i];
+                    if (openDropdown.classList.contains('show')) {
+                        openDropdown.classList.remove('show');
+                    }
+                }
+            }
+        }
+
+        // Chart.js Logic
+        let myChart = null;
+        function loadChartData() {
+            fetch('/api/data')
+            .then(res => res.json())
+            .then(data => {
+                if (data.ramFree && data.ramTotal) {
+                    const rf = (data.ramFree / 1024).toFixed(1);
+                    const rt = (data.ramTotal / 1024).toFixed(1);
+                    document.getElementById('ram-info').innerText = `RAM Trống: ${rf} KB / ${rt} KB`;
+                }
+                if (data.outT !== undefined) {
+                    let wInfo = `Ngoài trời: ${data.outT.toFixed(1)}°C | ${data.outH}%<br>`;
+                    wInfo += `Trong nhà: ${data.inT.toFixed(1)}°C | ${data.inH}%<br>`;
+                    wInfo += `AI: <span style="color: #64748b;">${data.ai}</span>`;
+                    document.getElementById('weather-info').innerHTML = wInfo;
+                }
+                
+                const ctx = document.getElementById('dataChart').getContext('2d');
+                const curH = data.curHour !== undefined ? data.curHour : new Date().getHours();
+                const count = data.histT.length;
+                const labels = data.histT.map((_, i) => {
+                    let h = curH - (count - 1 - i);
+                    if (h < 0) h += 24;
+                    return h + "h";
+                });
+                
+                if (myChart) {
+                    myChart.data.labels = labels;
+                    myChart.data.datasets[0].data = data.histT;
+                    myChart.data.datasets[1].data = data.histH;
+                    if(data.histOwmT) {
+                        myChart.data.datasets[2].data = data.histOwmT;
+                        myChart.data.datasets[3].data = data.histOwmH;
+                    }
+                    myChart.update();
+                } else {
+                    let datasets = [
+                        { label: 'In Temp (C)', data: data.histT, borderColor: '#ef4444', tension: 0.3 },
+                        { label: 'In Hum (%)', data: data.histH, borderColor: '#3b82f6', tension: 0.3 }
+                    ];
+                    if(data.histOwmT) {
+                        datasets.push({ label: 'Out Temp (C)', data: data.histOwmT, borderColor: '#f97316', tension: 0.3, borderDash: [5, 5] });
+                        datasets.push({ label: 'Out Hum (%)', data: data.histOwmH, borderColor: '#0ea5e9', tension: 0.3, borderDash: [5, 5] });
+                    }
+                    myChart = new Chart(ctx, {
+                        type: 'line',
+                        data: {
+                            labels: labels,
+                            datasets: datasets
+                        },
+                        options: {
+                            responsive: true, maintainAspectRatio: false,
+                            plugins: { legend: { labels: { color: '#4a5568' } } },
+                            scales: {
+                                x: { ticks: { color: '#4a5568' } },
+                                y: { ticks: { color: '#4a5568' } }
+                            }
+                        }
+                    });
+                }
+            })
+            .catch(err => console.log("Chart fetch error", err));
+        }
+
+        window.onload = () => {
+            ['logCsv', 'ota', 'audio', 'popup'].forEach(k => {
+                document.getElementById('chk-'+k).addEventListener('change', () => {
+                    const data = {
+                        logCsv: document.getElementById('chk-logCsv').checked,
+                        ota: document.getElementById('chk-ota').checked,
+                        audio: document.getElementById('chk-audio').checked,
+                        popup: document.getElementById('chk-popup').checked
+                    };
+                    fetch('/api/settings', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify(data)
+                    });
+                });
+            });
+            connectWs();
+            loadChartData();
+            setInterval(loadChartData, 10000); // Reload chart & RAM every 10 seconds
+        };
+    </script>
+
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">Cài Đặt Hệ Thống</div>
+            <div class="setting-item">
+                <span>Lưu log CSV (LittleFS)</span>
+                <label class="switch"><input type="checkbox" id="chk-logCsv"><span class="slider"></span></label>
+            </div>
+            <div class="setting-item">
+                <span>Cập nhật qua Web (OTA)</span>
+                <label class="switch"><input type="checkbox" id="chk-ota"><span class="slider"></span></label>
+            </div>
+            <div class="setting-item">
+                <span>Âm thanh cảnh báo</span>
+                <label class="switch"><input type="checkbox" id="chk-audio"><span class="slider"></span></label>
+            </div>
+            <div class="setting-item">
+                <span>Pop-up trên màn hình</span>
+                <label class="switch"><input type="checkbox" id="chk-popup"><span class="slider"></span></label>
+            </div>
+            <div style="display:flex; gap:10px; margin-top: 20px;">
+                <button class="close-btn" onclick="document.getElementById('settings-modal').style.display='none'">Đóng</button>
+                <button class="close-btn" style="background:#10b981;" onclick="window.location.href='/download_csv'">Tải CSV</button>
+            </div>
+            <div style="margin-top: 15px;">
+                <form method="POST" action="/update" enctype="multipart/form-data" id="ota-form">
+                    <input type="file" name="update" style="width:100%; font-size: 12px;">
+                    <button type="submit" class="close-btn" style="background:#ef4444; margin-top:5px; padding:5px;">Nạp Firmware OTA</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- Terminal Modal -->
+    <div id="terminal-modal" class="modal">
+        <div class="modal-content" style="background: #1e1e1e; color: #00ff00; font-family: monospace; height: 80vh; width: 90%; max-width: 800px;">
+            <div class="modal-header" style="color: #fff; border-bottom: 1px solid #333;">Terminal Log</div>
+            <div id="terminal-output" style="overflow-y: auto; height: calc(100% - 120px); padding: 10px; text-align: left; white-space: pre-wrap; font-size: 14px;"></div>
+            <div style="display:flex; gap:10px; margin-top: 20px; justify-content: center;">
+                <button class="close-btn" style="background:#555;" onclick="document.getElementById('terminal-modal').style.display='none'">Đóng</button>
+                <button class="close-btn" style="background:#d32f2f;" onclick="document.getElementById('terminal-output').innerHTML=''">Xóa Log</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- File Manager Modal -->
+    <div id="fm-modal" class="modal">
+        <div class="modal-content" style="width: 90%; max-width: 600px;">
+            <div class="modal-header">Quản Lý File (LittleFS)</div>
+            <div id="fm-list" style="max-height: 50vh; overflow-y: auto; margin-bottom: 20px;">
+                <table style="width: 100%; border-collapse: collapse; text-align: left;">
+                    <thead>
+                        <tr style="border-bottom: 2px solid #ddd;">
+                            <th style="padding: 10px; color: #555;">Tên File</th>
+                            <th style="padding: 10px; color: #555;">Dung lượng</th>
+                            <th style="padding: 10px; color: #555;">Hành động</th>
+                        </tr>
+                    </thead>
+                    <tbody id="fm-tbody"></tbody>
+                </table>
+            </div>
+            <div style="display:flex; justify-content: center; gap: 10px;">
+                <button class="close-btn" onclick="document.getElementById('fm-modal').style.display='none'">Đóng</button>
+                <button class="close-btn" style="background:#3b82f6;" onclick="loadFiles()">Làm mới</button>
+            </div>
+        </div>
+    </div>
+
+</body>
+</html>

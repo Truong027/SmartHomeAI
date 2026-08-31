@@ -1,0 +1,231 @@
+2230:                 offset: const Offset(0, 8),
+2231:               ),
+2232:             ],
+2233:           ),
+2234:           child: Column(
+2235:             crossAxisAlignment: CrossAxisAlignment.start,
+2236:             children: [
+2237:               InkWell(
+2238:                 onTap: () {
+2239:                   setState(() => _isExpanded = !_isExpanded);
+2240:                 },
+2241:                 borderRadius: BorderRadius.circular(16),
+2242:                 child: Row(
+2243:                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
+2244:                   children: [
+2245:                     Expanded(
+2246:                       child: Column(
+2247:                         crossAxisAlignment: CrossAxisAlignment.start,
+2248:                         children: [
+2249:                           Row(
+2250:                             children: [
+2251:                             // Online/Offline dot
+2252:                             Container(
+2253:                               width: 10,
+2254:                               height: 10,
+2255:                               margin: const EdgeInsets.only(right: 8),
+2256:                               decoration: BoxDecoration(
+2257:                                 color: isOnline ? const Color(0xFF00E676) : const Color(0xFFFF5252),
+2258:                                 shape: BoxShape.circle,
+2259:                                 boxShadow: [
+2260:                                   BoxShadow(
+2261:                                     color: (isOnline ? const Color(0xFF00E676) : const Color(0xFFFF5252)).withOpacity(0.5),
+2262:                                     blurRadius: 6,
+2263:                                     spreadRadius: 1,
+2264:                                   ),
+2265:                                 ],
+2266:                               ),
+2267:                             ),
+2268:                             Flexible(child: Text(widget.name, style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: AppThemeColors.textPrimary(context)), overflow: TextOverflow.ellipsis)),
+2269:                             const SizedBox(width: 8),
+2270:                             GestureDetector(
+2271:                               onTap: () => _editDeviceRoomAndNameDialog(context, user.uid, widget.deviceId, widget.name, widget.room ?? 'Phòng Khách'),
+2272:                               child: Container(
+2273:                                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+2274:                                 decoration: BoxDecoration(
+2275:                                   color: const Color(0xFF00E5FF).withOpacity(0.15),
+2276:                                   borderRadius: BorderRadius.circular(8),
+2277:                                   border: Border.all(color: const Color(0xFF00E5FF).withOpacity(0.4)),
+2278:                                 ),
+2279:                                 child: Row(
+2280:                                   mainAxisSize: MainAxisSize.min,
+2281:                                   children: [
+2282:                                     Text(widget.room ?? 'Phòng Khách', style: const TextStyle(color: Color(0xFF00E5FF), fontSize: 11, fontWeight: FontWeight.bold)),
+2283:                                     const SizedBox(width: 4),
+2284:                                     const Icon(Icons.edit, color: Color(0xFF00E5FF), size: 10),
+2285:                                   ],
+2286:                                 ),
+2287:                               ),
+2288:                             ),
+2289:                           ],
+2290:                         ),
+2291:                         const SizedBox(height: 4),
+2292:                         Row(
+2293:                           children: [
+2294:                             Container(
+2295:                               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+2296:                               decoration: BoxDecoration(
+2297:                                 color: (isOnline ? const Color(0xFF00E676) : const Color(0xFFFF5252)).withOpacity(0.15),
+2298:                                 borderRadius: BorderRadius.circular(6),
+2299:                               ),
+2300:                               child: Text(
+2301:                                 isOnline ? "🟢 Online" : "🔴 Offline",
+2302:                                 style: TextStyle(color: isOnline ? const Color(0xFF00E676) : const Color(0xFFFF5252), fontSize: 10, fontWeight: FontWeight.bold),
+2303:                               ),
+2304:                             ),
+2305:                             if (isOnline && uptimeStr.isNotEmpty) ...[
+2306:                               const SizedBox(width: 8),
+2307:                               Text("⏱ $uptimeStr", style: TextStyle(color: AppThemeColors.textMuted(context), fontSize: 10)),
+2308:                             ],
+2309:                           ],
+2310:                         ),
+2311:                         const SizedBox(height: 4),
+2312:                         Wrap(
+2313:                           crossAxisAlignment: WrapCrossAlignment.center,
+2314:                           spacing: 8,
+2315:                           runSpacing: 4,
+2316:                           children: [
+2317:                             Text("Node ID: ${widget.nodeId}", style: TextStyle(color: AppThemeColors.textMuted(context), fontSize: 12)),
+2318:                             Builder(
+2319:                               builder: (context) {
+2320:                                 final token = "AUTH-${(widget.nodeId.hashCode.abs() % 899999 + 100000)}";
+2321:                                 // Register token mapping in Firebase if not present
+2322:                                 FirebaseDatabase.instance.ref().child('tokens/$token').set({
+2323:                                   'node_id': widget.nodeId,
+2324:                                   'name': widget.name,
+2325:                                   'type': widget.type,
+2326:                                 });
+2327: 
+2328:                                 return InkWell(
+2329:                                   onTap: () {
+2330:                                     Clipboard.setData(ClipboardData(text: token));
+2331:                                     ScaffoldMessenger.of(context).showSnackBar(
+2332:                                       SnackBar(content: Text("Đã sao chép Auth Token: $token")),
+2333:                                     );
+2334:                                   },
+2335:                                   child: Container(
+2336:                                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+2337:                                     decoration: BoxDecoration(
+2338:                                       color: const Color(0xFF00E5FF).withOpacity(0.12),
+2339:                                       borderRadius: BorderRadius.circular(6),
+2340:                                       border: Border.all(color: const Color(0xFF00E5FF).withOpacity(0.3)),
+2341:                                     ),
+2342:                                     child: Row(
+2343:                                       mainAxisSize: MainAxisSize.min,
+2344:                                       children: [
+2345:                                         const Icon(Icons.key, color: Color(0xFF00E5FF), size: 11),
+2346:                                         const SizedBox(width: 4),
+2347:                                         Text(token, style: const TextStyle(color: Color(0xFF00E5FF), fontSize: 10, fontWeight: FontWeight.bold)),
+2348:                                         const SizedBox(width: 4),
+2349:                                         const Icon(Icons.copy, color: Color(0xFF00E5FF), size: 10),
+2350:                                       ],
+2351:                                     ),
+2352:                                   ),
+2353:                                 );
+2354:                               },
+2355:                             ),
+2356:                           ],
+2357:                         ),
+2358:                       ],
+2359:                     ),
+2360:                   ),
+2361:                 ],
+2362:               ),
+2363:             ),
+2364:             if (_isExpanded) ...[
+2365:               const SizedBox(height: 12),
+2366:               if (widget.isAdmin)
+2367:                 Row(
+2368:                       children: [
+2369:                         IconButton(
+2370:                           tooltip: "Đổi phòng & sửa tên thiết bị",
+2371:                           icon: const Icon(Icons.edit_outlined, color: Color(0xFF00E5FF)),
+2372:                           onPressed: () => _editDeviceRoomAndNameDialog(context, user.uid, widget.deviceId, widget.name, widget.room ?? 'Phòng Khách'),
+2373:                         ),
+2374:                         IconButton(
+2375:                           tooltip: "Thêm công cụ Blynk",
+2376:                           icon: const Icon(Icons.add_circle_outline, color: Color(0xFF00E5FF)),
+2377:                           onPressed: () => _showAddWidgetDialog(context, user.uid, widget.deviceId),
+2378:                         ),
+2379:                         IconButton(
+2380:                           tooltip: "Xóa thiết bị",
+2381:                           icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+2382:                           onPressed: () => _confirmDeleteDevice(context, user.uid, widget.deviceId),
+2383:                         ),
+2384:                       ],
+2385:                     ),
+2386:                 ],
+2387:               ),
+2388:               if (widget.isAdmin) ...[
+2389:                 const SizedBox(height: 12),
+2390:                 Wrap(
+2391:                   spacing: 8,
+2392:                   runSpacing: 8,
+2393:                   crossAxisAlignment: WrapCrossAlignment.center,
+2394:                   children: [
+2395:                     // Button Restart Mạch (Cloud & HTTP)
+2396:                     ElevatedButton.icon(
+2397:                       style: ElevatedButton.styleFrom(
+2398:                         backgroundColor: const Color(0xFFFFAB00),
+2399:                         foregroundColor: Colors.black,
+2400:                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+2401:                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+2402:                         minimumSize: Size.zero,
+2403:                         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+2404:                       ),
+2405:                       icon: const Icon(Icons.restart_alt, size: 14),
+2406:                       label: const Text("Restart Mạch", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+2407:                       onPressed: () => _rebootBoard(context, widget.nodeId, ip),
+2408:                     ),
+2409: 
+2410:                     // Button Nạp OTA & Cấu hình Web
+2411:                     GestureDetector(
+2412:                       onTap: () => _showOtaOptionsDialog(context, ip, widget.nodeId, widget.name),
+2413:                       child: Container(
+2414:                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+2415:                         decoration: BoxDecoration(
+2416:                           color: const Color(0xFF00E5FF).withOpacity(0.12),
+2417:                           borderRadius: BorderRadius.circular(8),
+2418:                           border: Border.all(color: const Color(0xFF00E5FF).withOpacity(0.3)),
+2419:                         ),
+2420:                         child: Row(
+2421:                           mainAxisSize: MainAxisSize.min,
+2422:                           children: [
+2423:                             const Icon(Icons.system_update_alt, color: Color(0xFF00E5FF), size: 14),
+2424:                             const SizedBox(width: 6),
+2425:                             Text(
+2426:                               ip != "N/A" ? "Nạp OTA / Web ($ip)" : "Nạp OTA Cloud",
+2427:                               style: const TextStyle(color: Color(0xFF00E5FF), fontSize: 11, fontWeight: FontWeight.bold),
+2428:                             ),
+2429:                             const SizedBox(width: 2),
+2430:                             const Icon(Icons.arrow_drop_down, color: Color(0xFF00E5FF), size: 14),
+2431:                           ],
+2432:                         ),
+2433:                       ),
+2434:                     ),
+2435:                   ],
+2436:                 ),
+2437:                 const SizedBox(height: 16),
+2438:               ] else
+2439:                 const SizedBox(height: 8),
+2440: 
+2441:               if (currentWidgets.isNotEmpty)
+2442:                 _buildWidgetsLayout(currentWidgets, data, user.uid)
+2443:               else
+2444:                 const Padding(
+2445:                   padding: EdgeInsets.symmetric(vertical: 20),
+2446:                   child: Center(child: Text("Bấm nút + bên trên để thêm công cụ Blynk (Nút, Biểu đồ, Slider...)", style: TextStyle(color: Colors.white54))),
+2447:                 ),
+2448:             ],
+2449:           ),
+2450:         );
+2451:   }
+2452: 
+2453:   void _seedDefaultWidgetsIfEmpty(String uid, String devId, String type) {
+2454:     final widgetsRef = FirebaseDatabase.instance.ref().child('users/$uid/devices/$devId/widgets');
+2455:     if (type == 'gateway') {
+2456:       widgetsRef.child('w_advice').set({'type': 'ai_advice', 'title': 'Khuyên dùng AI'});
+2457:       widgetsRef.child('w_temp').set({'type': 'gauge', 'title': 'Nhiệt độ phòng', 'pin': 'indoorTemp', 'unit': '°C', 'min': 0, 'max': 50, 'color': '0xFFFF5252', 'icon': 'thermostat'});
+2458:       widgetsRef.child('w_hum').set({'type': 'gauge', 'title': 'Độ ẩm phòng', 'pin': 'indoorHum', 'unit': '%', 'min': 0, 'max': 100, 'color': '0xFF448AFF', 'icon': 'water_drop'});
+2459:       widgetsRef.child('w_chart').set({'type': 'chart', 'title': 'Biểu đồ Nhiệt độ', 'pin': 'indoorTemp', 'unit': '°C', 'color': '0xFF00E5FF'});
+2460:       widgetsRef.child('w_r1').set({'type': 'switch', 'title': 'Relay 1 (Đèn)', 'pin': 'relay1', 'icon': 'lightbulb', 'color': '0xFFFFAB00'});

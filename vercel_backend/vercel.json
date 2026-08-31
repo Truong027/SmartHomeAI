@@ -1,0 +1,29 @@
+{
+  "version": 2,
+  "rewrites": [
+    { "source": "/api/tts.mp3", "destination": "/api/tts" },
+    { "source": "/api/tts/(.*).mp3", "destination": "/api/tts?q=$1" },
+    { "source": "/api/stream/(.*).m4a", "destination": "/api/stream?id=$1" },
+    { "source": "/api/stream/(.*).mp3", "destination": "/api/stream?id=$1" },
+    { "source": "/api/stream/(.*).aac", "destination": "/api/stream?id=$1" },
+    { "source": "/api/stream.m4a", "destination": "/api/stream" },
+    { "source": "/api/stream.mp3", "destination": "/api/stream" },
+    { "source": "/api/stream.aac", "destination": "/api/stream" }
+  ],
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        { "key": "Access-Control-Allow-Origin", "value": "*" },
+        { "key": "Access-Control-Allow-Methods", "value": "GET,POST,OPTIONS" },
+        { "key": "Access-Control-Allow-Headers", "value": "Content-Type,Authorization,Range" },
+        { "key": "Access-Control-Expose-Headers", "value": "Content-Length,Content-Range,Accept-Ranges" }
+      ]
+    }
+  ],
+  "functions": {
+    "api/*.js": {
+      "maxDuration": 30
+    }
+  }
+}
