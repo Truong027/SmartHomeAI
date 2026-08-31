@@ -547,7 +547,5 @@ void processAudioLoop() {
   if (audio.isRunning()) {
     audio.loop();
     audio.loop();
-  } else {
-    audio.loop();
   }
 }

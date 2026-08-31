@@ -122,163 +122,184 @@ void updateBootScreen(int progress) {
   lv_timer_handler();
 }
 
+lv_obj_t * arc_temp_gauge = nullptr;
+
 // ==========================================
-// 2. MÀN HÌNH CHÍNH (MAIN DASHBOARD SCREEN)
+// 2. MÀN HÌNH CHÍNH (MAIN DASHBOARD SCREEN - SQUARELINE STUDIO CYBER WATCHFACE)
 // ==========================================
 void setupMainScreen() {
   screen_main = lv_obj_create(NULL);
-  lv_obj_set_style_bg_color(screen_main, lv_color_hex(0x050914), 0); // Atmospheric Deep Cyber Navy
+  lv_obj_set_style_bg_color(screen_main, lv_color_hex(0x030712), 0); // Atmospheric Deep Space Black
 
-  // --- HEADER: Clock, Prediction Pill, Date ---
-  lv_obj_t * row_header = lv_obj_create(screen_main);
-  lv_obj_set_size(row_header, 160, 24);
-  lv_obj_align(row_header, LV_ALIGN_TOP_MID, 0, 0);
-  lv_obj_set_style_bg_color(row_header, lv_color_hex(0x0B132B), 0);
-  lv_obj_set_style_border_width(row_header, 0, 0);
-  lv_obj_set_style_border_color(row_header, lv_color_hex(0x1E293B), 0);
-  lv_obj_set_style_border_side(row_header, LV_BORDER_SIDE_BOTTOM, 0);
-  lv_obj_set_style_pad_all(row_header, 3, 0);
-  lv_obj_set_layout(row_header, LV_LAYOUT_FLEX);
-  lv_obj_set_flex_flow(row_header, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(row_header, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  // =========================================================================
+  // 1. TOP CYBER STATUS BAR (Header)
+  // =========================================================================
+  lv_obj_t * top_bar = lv_obj_create(screen_main);
+  lv_obj_set_size(top_bar, 156, 17);
+  lv_obj_align(top_bar, LV_ALIGN_TOP_MID, 0, 1);
+  lv_obj_set_style_bg_color(top_bar, lv_color_hex(0x081020), 0);
+  lv_obj_set_style_border_width(top_bar, 0, 0);
+  lv_obj_set_style_pad_all(top_bar, 1, 0);
+  lv_obj_set_scrollbar_mode(top_bar, LV_SCROLLBAR_MODE_OFF);
 
-  // Time label
-  label_time = lv_label_create(row_header);
-  lv_obj_set_style_text_color(label_time, lv_color_hex(0x00F0FF), 0);
+  label_date = lv_label_create(top_bar);
+  lv_obj_set_style_text_color(label_date, lv_color_hex(0x38BDF8), 0); // Neon Sky Blue
+  lv_obj_set_style_text_font(label_date, &lv_font_montserrat_10, 0);
+  lv_label_set_text(label_date, "00/00 - 00/00 AL");
+  lv_obj_align(label_date, LV_ALIGN_LEFT_MID, 3, 0);
+
+  pred_icon = lv_obj_create(top_bar);
+  lv_obj_set_size(pred_icon, 5, 5);
+  lv_obj_set_style_radius(pred_icon, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_color(pred_icon, lv_color_hex(0x10B981), 0); // Live green dot
+  lv_obj_set_style_border_width(pred_icon, 0, 0);
+  lv_obj_align(pred_icon, LV_ALIGN_RIGHT_MID, -52, 0);
+
+  label_pred = lv_label_create(top_bar);
+  lv_obj_set_style_text_color(label_pred, lv_color_hex(0x00F0FF), 0);
+  lv_obj_set_style_text_font(label_pred, &lv_font_montserrat_10, 0);
+  lv_label_set_text(label_pred, "NORI AI");
+  lv_obj_align(label_pred, LV_ALIGN_RIGHT_MID, -4, 0);
+
+  // =========================================================================
+  // 2. CENTER CYBER WATCH DIAL (Honeycomb Smartwatch Center)
+  // =========================================================================
+  lv_obj_t * dial_center = lv_obj_create(screen_main);
+  lv_obj_set_size(dial_center, 88, 80);
+  lv_obj_align(dial_center, LV_ALIGN_TOP_MID, 0, 20);
+  lv_obj_set_style_bg_color(dial_center, lv_color_hex(0x081224), 0); // Dark Cyber Navy Glass
+  lv_obj_set_style_border_width(dial_center, 1, 0);
+  lv_obj_set_style_border_color(dial_center, lv_color_hex(0x1E293B), 0);
+  lv_obj_set_style_radius(dial_center, 14, 0);
+  lv_obj_set_style_pad_all(dial_center, 0, 0);
+  lv_obj_set_scrollbar_mode(dial_center, LV_SCROLLBAR_MODE_OFF);
+
+  // Dynamic Temperature Arc Gauge (Encircles the top of the clock)
+  arc_temp_gauge = lv_arc_create(dial_center);
+  lv_obj_set_size(arc_temp_gauge, 80, 80);
+  lv_obj_align(arc_temp_gauge, LV_ALIGN_CENTER, 0, 0);
+  lv_arc_set_rotation(arc_temp_gauge, 140);
+  lv_arc_set_bg_angles(arc_temp_gauge, 0, 260);
+  lv_arc_set_range(arc_temp_gauge, 15, 40);
+  lv_arc_set_value(arc_temp_gauge, (int)indoorTemp);
+  lv_obj_remove_style(arc_temp_gauge, NULL, LV_PART_KNOB); // No knob
+  lv_obj_set_style_arc_width(arc_temp_gauge, 4, LV_PART_MAIN);
+  lv_obj_set_style_arc_color(arc_temp_gauge, lv_color_hex(0x1E293B), LV_PART_MAIN);
+  lv_obj_set_style_arc_width(arc_temp_gauge, 4, LV_PART_INDICATOR);
+  lv_obj_set_style_arc_color(arc_temp_gauge, lv_color_hex(0xFF6A00), LV_PART_INDICATOR); // Radiant Cyber Orange
+  lv_obj_set_style_arc_rounded(arc_temp_gauge, true, LV_PART_INDICATOR);
+
+  // Big Glowing Digital Clock
+  label_time = lv_label_create(dial_center);
+  lv_obj_set_style_text_color(label_time, lv_color_hex(0xFF7A00), 0); // Glowing Neon Amber (As in picture!)
   lv_obj_set_style_text_font(label_time, &lv_font_montserrat_14, 0);
+  lv_obj_align(label_time, LV_ALIGN_CENTER, 0, -8);
   lv_label_set_text(label_time, "00:00");
 
-  // Center Weather/AI Prediction Pill
-  lv_obj_t * pred_container = lv_obj_create(row_header);
-  lv_obj_set_size(pred_container, 58, 18);
-  lv_obj_set_style_bg_color(pred_container, lv_color_hex(0x0F172A), 0);
-  lv_obj_set_style_border_width(pred_container, 1, 0);
-  lv_obj_set_style_border_color(pred_container, lv_color_hex(0x334155), 0);
-  lv_obj_set_style_radius(pred_container, 9, 0);
-  lv_obj_set_style_pad_all(pred_container, 2, 0);
-  lv_obj_set_layout(pred_container, LV_LAYOUT_FLEX);
-  lv_obj_set_flex_flow(pred_container, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(pred_container, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  // Center Metrics Badge (Temp & Hum)
+  label_in_temp = lv_label_create(dial_center);
+  lv_obj_set_style_text_color(label_in_temp, lv_color_hex(0xE2E8F0), 0); // Crisp Ice White
+  lv_obj_set_style_text_font(label_in_temp, &lv_font_montserrat_10, 0);
+  lv_obj_align(label_in_temp, LV_ALIGN_CENTER, 0, 14);
+  lv_label_set_text(label_in_temp, "-- C | -- %");
 
-  pred_icon = lv_obj_create(pred_container);
-  lv_obj_set_size(pred_icon, 6, 6);
-  lv_obj_set_style_radius(pred_icon, LV_RADIUS_CIRCLE, 0);
-  lv_obj_set_style_bg_color(pred_icon, lv_color_hex(0xF59E0B), 0);
-  lv_obj_set_style_border_width(pred_icon, 0, 0);
+  label_in_hum = nullptr; // Combined into label_in_temp
 
-  label_pred = lv_label_create(pred_container);
-  lv_obj_set_style_text_color(label_pred, lv_color_hex(0xF8FAFC), 0);
-  lv_obj_set_style_text_font(label_pred, &lv_font_montserrat_10, 0);
-  lv_label_set_long_mode(label_pred, LV_LABEL_LONG_SCROLL_CIRCULAR);
-  lv_obj_set_width(label_pred, 42);
-  lv_label_set_text(label_pred, "");
-  lv_obj_set_style_pad_left(label_pred, 3, 0);
+  // =========================================================================
+  // 3. LEFT FLANK CAPSULE (Relay 1 & Barometric Pressure)
+  // =========================================================================
+  lv_obj_t * flank_left = lv_obj_create(screen_main);
+  lv_obj_set_size(flank_left, 32, 80);
+  lv_obj_align(flank_left, LV_ALIGN_TOP_LEFT, 2, 20);
+  lv_obj_set_style_bg_color(flank_left, lv_color_hex(0x0A1324), 0);
+  lv_obj_set_style_border_width(flank_left, 1, 0);
+  lv_obj_set_style_border_color(flank_left, lv_color_hex(0x1E293B), 0);
+  lv_obj_set_style_radius(flank_left, 8, 0);
+  lv_obj_set_style_pad_all(flank_left, 1, 0);
+  lv_obj_set_scrollbar_mode(flank_left, LV_SCROLLBAR_MODE_OFF);
 
-  // Date label
-  label_date = lv_label_create(row_header);
-  lv_obj_set_style_text_color(label_date, lv_color_hex(0x94A3B8), 0);
-  lv_obj_set_style_text_font(label_date, &lv_font_montserrat_10, 0);
-  lv_label_set_text(label_date, "00/00");
+  lv_obj_t * title_r1 = lv_label_create(flank_left);
+  lv_obj_set_style_text_color(title_r1, lv_color_hex(0x94A3B8), 0);
+  lv_obj_set_style_text_font(title_r1, &lv_font_montserrat_10, 0);
+  lv_label_set_text(title_r1, "R1");
+  lv_obj_align(title_r1, LV_ALIGN_TOP_MID, 0, 2);
 
-  // --- MIDDLE: Dual Sensor Cards (INDOOR & OUTDOOR) ---
-  lv_obj_t * row_sensors = lv_obj_create(screen_main);
-  lv_obj_set_size(row_sensors, 160, 74);
-  lv_obj_align(row_sensors, LV_ALIGN_TOP_MID, 0, 26);
-  lv_obj_set_style_bg_opa(row_sensors, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_border_width(row_sensors, 0, 0);
-  lv_obj_set_style_pad_hor(row_sensors, 3, 0);
-  lv_obj_set_style_pad_ver(row_sensors, 2, 0);
-  lv_obj_set_layout(row_sensors, LV_LAYOUT_FLEX);
-  lv_obj_set_flex_flow(row_sensors, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(row_sensors, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  label_relay1 = lv_label_create(flank_left);
+  lv_obj_set_style_text_color(label_relay1, lv_color_hex(0xEF4444), 0);
+  lv_obj_set_style_text_font(label_relay1, &lv_font_montserrat_10, 0);
+  lv_label_set_text(label_relay1, "OFF");
+  lv_obj_align(label_relay1, LV_ALIGN_TOP_MID, 0, 16);
 
-  // Card 1: INDOOR (Left)
-  lv_obj_t * card_in = lv_obj_create(row_sensors);
-  lv_obj_set_size(card_in, 74, 70);
-  lv_obj_set_style_bg_color(card_in, lv_color_hex(0x0F172A), 0);
-  lv_obj_set_style_border_width(card_in, 1, 0);
-  lv_obj_set_style_border_color(card_in, lv_color_hex(0x1E293B), 0);
-  lv_obj_set_style_radius(card_in, 6, 0);
-  lv_obj_set_style_pad_all(card_in, 3, 0);
-  lv_obj_set_layout(card_in, LV_LAYOUT_FLEX);
-  lv_obj_set_flex_flow(card_in, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_flex_align(card_in, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-  lv_obj_t * title_in = lv_label_create(card_in);
-  lv_obj_set_style_text_color(title_in, lv_color_hex(0xF59E0B), 0); // Warm Amber
-  lv_obj_set_style_text_font(title_in, &lv_font_montserrat_10, 0);
-  lv_label_set_text(title_in, "INDOOR");
-
-  label_in_temp = lv_label_create(card_in);
-  lv_obj_set_style_text_color(label_in_temp, lv_color_hex(0xF8FAFC), 0);
-  lv_obj_set_style_text_font(label_in_temp, &lv_font_montserrat_12, 0);
-  lv_label_set_text(label_in_temp, "-- C");
-
-  label_in_hum = lv_label_create(card_in);
-  lv_obj_set_style_text_color(label_in_hum, lv_color_hex(0x38BDF8), 0); // Sky Blue
-  lv_obj_set_style_text_font(label_in_hum, &lv_font_montserrat_10, 0);
-  lv_label_set_text(label_in_hum, "-- %");
-
-  label_in_pres = lv_label_create(card_in);
-  lv_obj_set_style_text_color(label_in_pres, lv_color_hex(0xA78BFA), 0); // Violet
+  label_in_pres = lv_label_create(flank_left);
+  lv_obj_set_style_text_color(label_in_pres, lv_color_hex(0xA78BFA), 0); // Amethyst
   lv_obj_set_style_text_font(label_in_pres, &lv_font_montserrat_10, 0);
-  lv_label_set_long_mode(label_in_pres, LV_LABEL_LONG_SCROLL_CIRCULAR);
-  lv_obj_set_width(label_in_pres, lv_pct(100));
-  lv_obj_set_style_text_align(label_in_pres, LV_TEXT_ALIGN_CENTER, 0);
-  lv_label_set_text(label_in_pres, "-- hPa");
+  lv_label_set_text(label_in_pres, "1013");
+  lv_obj_align(label_in_pres, LV_ALIGN_BOTTOM_MID, 0, -14);
 
-  // Card 2: OUTDOOR (Right)
-  lv_obj_t * card_out = lv_obj_create(row_sensors);
-  lv_obj_set_size(card_out, 74, 70);
-  lv_obj_set_style_bg_color(card_out, lv_color_hex(0x0F172A), 0);
-  lv_obj_set_style_border_width(card_out, 1, 0);
-  lv_obj_set_style_border_color(card_out, lv_color_hex(0x1E293B), 0);
-  lv_obj_set_style_radius(card_out, 6, 0);
-  lv_obj_set_style_pad_all(card_out, 3, 0);
-  lv_obj_set_layout(card_out, LV_LAYOUT_FLEX);
-  lv_obj_set_flex_flow(card_out, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_flex_align(card_out, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_t * unit_pres = lv_label_create(flank_left);
+  lv_obj_set_style_text_color(unit_pres, lv_color_hex(0x64748B), 0);
+  lv_obj_set_style_text_font(unit_pres, &lv_font_montserrat_10, 0);
+  lv_label_set_text(unit_pres, "hPa");
+  lv_obj_align(unit_pres, LV_ALIGN_BOTTOM_MID, 0, -2);
 
-  lv_obj_t * title_out = lv_label_create(card_out);
-  lv_obj_set_style_text_color(title_out, lv_color_hex(0x10B981), 0); // Emerald Green
-  lv_obj_set_style_text_font(title_out, &lv_font_montserrat_10, 0);
-  lv_label_set_text(title_out, "OUTDOOR");
+  // =========================================================================
+  // 4. RIGHT FLANK CAPSULE (Relay 2 & Outdoor Temp)
+  // =========================================================================
+  lv_obj_t * flank_right = lv_obj_create(screen_main);
+  lv_obj_set_size(flank_right, 32, 80);
+  lv_obj_align(flank_right, LV_ALIGN_TOP_RIGHT, -2, 20);
+  lv_obj_set_style_bg_color(flank_right, lv_color_hex(0x0A1324), 0);
+  lv_obj_set_style_border_width(flank_right, 1, 0);
+  lv_obj_set_style_border_color(flank_right, lv_color_hex(0x1E293B), 0);
+  lv_obj_set_style_radius(flank_right, 8, 0);
+  lv_obj_set_style_pad_all(flank_right, 1, 0);
+  lv_obj_set_scrollbar_mode(flank_right, LV_SCROLLBAR_MODE_OFF);
 
-  label_out_temp = lv_label_create(card_out);
-  lv_obj_set_style_text_color(label_out_temp, lv_color_hex(0xF8FAFC), 0);
-  lv_obj_set_style_text_font(label_out_temp, &lv_font_montserrat_12, 0);
-  lv_label_set_text(label_out_temp, "-- C");
+  lv_obj_t * title_r2 = lv_label_create(flank_right);
+  lv_obj_set_style_text_color(title_r2, lv_color_hex(0x94A3B8), 0);
+  lv_obj_set_style_text_font(title_r2, &lv_font_montserrat_10, 0);
+  lv_label_set_text(title_r2, "R2");
+  lv_obj_align(title_r2, LV_ALIGN_TOP_MID, 0, 2);
 
-  label_weather = lv_label_create(card_out);
+  label_relay2 = lv_label_create(flank_right);
+  lv_obj_set_style_text_color(label_relay2, lv_color_hex(0xEF4444), 0);
+  lv_obj_set_style_text_font(label_relay2, &lv_font_montserrat_10, 0);
+  lv_label_set_text(label_relay2, "OFF");
+  lv_obj_align(label_relay2, LV_ALIGN_TOP_MID, 0, 16);
+
+  label_out_temp = lv_label_create(flank_right);
+  lv_obj_set_style_text_color(label_out_temp, lv_color_hex(0xF59E0B), 0);
+  lv_obj_set_style_text_font(label_out_temp, &lv_font_montserrat_10, 0);
+  lv_label_set_text(label_out_temp, "--");
+  lv_obj_align(label_out_temp, LV_ALIGN_BOTTOM_MID, 0, -14);
+
+  lv_obj_t * unit_out = lv_label_create(flank_right);
+  lv_obj_set_style_text_color(unit_out, lv_color_hex(0x64748B), 0);
+  lv_obj_set_style_text_font(unit_out, &lv_font_montserrat_10, 0);
+  lv_label_set_text(unit_out, "OUT");
+  lv_obj_align(unit_out, LV_ALIGN_BOTTOM_MID, 0, -2);
+
+  // =========================================================================
+  // 5. BOTTOM SMART MARQUEE TICKER CAPSULE (Weather & AI Intelligence)
+  // =========================================================================
+  lv_obj_t * capsule_bottom = lv_obj_create(screen_main);
+  lv_obj_set_size(capsule_bottom, 156, 23);
+  lv_obj_align(capsule_bottom, LV_ALIGN_BOTTOM_MID, 0, -2);
+  lv_obj_set_style_bg_color(capsule_bottom, lv_color_hex(0x070F20), 0);
+  lv_obj_set_style_border_width(capsule_bottom, 1, 0);
+  lv_obj_set_style_border_color(capsule_bottom, lv_color_hex(0x00F0FF), 0); // Neon Cyan Border
+  lv_obj_set_style_radius(capsule_bottom, 11, 0);
+  lv_obj_set_style_pad_all(capsule_bottom, 2, 0);
+  lv_obj_set_scrollbar_mode(capsule_bottom, LV_SCROLLBAR_MODE_OFF);
+
+  label_weather = lv_label_create(capsule_bottom);
   lv_obj_set_style_text_color(label_weather, lv_color_hex(0x38BDF8), 0);
   lv_obj_set_style_text_font(label_weather, &lv_font_montserrat_10, 0);
-  lv_label_set_long_mode(label_weather, LV_LABEL_LONG_SCROLL_CIRCULAR);
-  lv_obj_set_width(label_weather, lv_pct(100));
+  lv_label_set_long_mode(label_weather, LV_LABEL_LONG_DOT);
+  lv_obj_set_width(label_weather, 146);
   lv_obj_set_style_text_align(label_weather, LV_TEXT_ALIGN_CENTER, 0);
-  lv_label_set_text(label_weather, "Dang tai...");
-
-  // --- FOOTER: Relay Control Indicators ---
-  lv_obj_t * row_footer = lv_obj_create(screen_main);
-  lv_obj_set_size(row_footer, 160, 24);
-  lv_obj_align(row_footer, LV_ALIGN_BOTTOM_MID, 0, 0);
-  lv_obj_set_style_bg_color(row_footer, lv_color_hex(0x0B132B), 0);
-  lv_obj_set_style_border_width(row_footer, 0, 0);
-  lv_obj_set_style_border_color(row_footer, lv_color_hex(0x1E293B), 0);
-  lv_obj_set_style_border_side(row_footer, LV_BORDER_SIDE_TOP, 0);
-  lv_obj_set_style_pad_all(row_footer, 2, 0);
-  lv_obj_set_layout(row_footer, LV_LAYOUT_FLEX);
-  lv_obj_set_flex_flow(row_footer, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(row_footer, LV_FLEX_ALIGN_SPACE_AROUND, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-  label_relay1 = lv_label_create(row_footer);
-  lv_obj_set_style_text_color(label_relay1, lv_color_hex(0x64748B), 0);
-  lv_obj_set_style_text_font(label_relay1, &lv_font_montserrat_10, 0);
-  lv_label_set_text(label_relay1, "R1: OFF");
-
-  label_relay2 = lv_label_create(row_footer);
-  lv_obj_set_style_text_color(label_relay2, lv_color_hex(0x64748B), 0);
-  lv_obj_set_style_text_font(label_relay2, &lv_font_montserrat_10, 0);
-  lv_label_set_text(label_relay2, "R2: OFF");
+  lv_obj_align(label_weather, LV_ALIGN_CENTER, 0, 0);
+  lv_label_set_text(label_weather, "Dang khoi dong...");
 }
 
 void showMainScreen() {
@@ -289,58 +310,112 @@ void showMainScreen() {
   }
 }
 
-// Cập nhật giao diện Main Dashboard
+// Cập nhật giao diện Main Dashboard với cơ chế Smart Dirty-Checking (Chỉ vẽ lại khi có số liệu thay đổi thực sự)
 void updateLVGL_UI() {
-  if (label_time) lv_label_set_text_fmt(label_time, "%s", hhmmText.c_str());
-  if (label_date) lv_label_set_text_fmt(label_date, "%s", dateSolar.c_str());
-  
-  if (label_in_temp) lv_label_set_text_fmt(label_in_temp, "%s C", String(indoorTemp, 1).c_str());
-  if (label_in_hum) lv_label_set_text_fmt(label_in_hum, "%s %%", String(indoorHum, 0).c_str());
-  if (label_in_pres) lv_label_set_text_fmt(label_in_pres, "%s hPa", String(indoorPres, 0).c_str());
+  static String last_hhmm = "";
+  static String last_full_date = "";
+  static String last_in_metric = "";
+  static String last_in_pres = "";
+  static String last_out_temp = "";
+  static int last_relay1 = -1;
+  static int last_relay2 = -1;
+  static int last_temp_arc = -1;
 
-  if (label_out_temp) lv_label_set_text_fmt(label_out_temp, "%s C", String(owmTemp, 1).c_str());
-  if (label_weather) lv_label_set_text_fmt(label_weather, "%s", owmDesc.c_str());
-  
-  // Hiển thị dự báo thời tiết thông minh cho Center Capsule Pill
-  String displayForecast = ai_prediction_short;
-  if (displayForecast == "" || displayForecast == "Dang suy nghi...") {
-    if (owmDesc.length() > 0 && owmDesc != "Đang tải...") {
-      displayForecast = owmDesc;
-    } else {
-      displayForecast = (indoorTemp > 31.0f) ? "Oi buc" : ((indoorTemp < 22.0f) ? "Se lanh" : "Mat me");
-    }
-  }
-  if (label_pred) lv_label_set_text(label_pred, displayForecast.c_str());
-
-  if (pred_icon) {
-    String lowerDesc = owmDesc;
-    lowerDesc.toLowerCase();
-    if (lowerDesc.indexOf("mua") != -1 || ai_prediction_icon == "rain") {
-      lv_obj_set_style_bg_color(pred_icon, lv_color_hex(0x38BDF8), 0); // Mưa -> Chấm Xanh lam
-    } else if (lowerDesc.indexOf("may") != -1 || ai_prediction_icon == "cloud") {
-      lv_obj_set_style_bg_color(pred_icon, lv_color_hex(0x94A3B8), 0); // Mây -> Chấm Xám bạc
-    } else if (lowerDesc.indexOf("dong") != -1 || lowerDesc.indexOf("sam") != -1 || ai_prediction_icon == "storm") {
-      lv_obj_set_style_bg_color(pred_icon, lv_color_hex(0xA78BFA), 0); // Giông bão -> Chấm Tím
-    } else {
-      lv_obj_set_style_bg_color(pred_icon, lv_color_hex(0xF59E0B), 0); // Nắng / Mát -> Chấm Vàng Amber
-    }
+  if (label_time && hhmmText != last_hhmm) {
+    last_hhmm = hhmmText;
+    lv_label_set_text(label_time, hhmmText.c_str());
   }
 
-  if (label_relay1) {
-    lv_label_set_text_fmt(label_relay1, "R1: %s", relay1 ? "ON" : "OFF");
+  String fullDateStr = dateSolar;
+  if (dateLunar.length() > 0) fullDateStr += " - " + dateLunar;
+  if (label_date && fullDateStr != last_full_date) {
+    last_full_date = fullDateStr;
+    lv_label_set_text(label_date, fullDateStr.c_str());
+  }
+
+  // Cập nhật Cung Vòng Cung Nhiệt Độ Thực Tế (Dynamic Comfort Arc)
+  int arcVal = (int)indoorTemp;
+  if (arcVal < 15) arcVal = 15;
+  if (arcVal > 40) arcVal = 40;
+  if (arc_temp_gauge && arcVal != last_temp_arc) {
+    last_temp_arc = arcVal;
+    lv_arc_set_value(arc_temp_gauge, arcVal);
+    // Đổi sắc cung Arc theo nhiệt độ
+    if (arcVal >= 32) {
+      lv_obj_set_style_arc_color(arc_temp_gauge, lv_color_hex(0xEF4444), LV_PART_INDICATOR); // Đỏ nhiệt
+    } else if (arcVal >= 28) {
+      lv_obj_set_style_arc_color(arc_temp_gauge, lv_color_hex(0xFF7A00), LV_PART_INDICATOR); // Cam Hổ Phách
+    } else if (arcVal <= 22) {
+      lv_obj_set_style_arc_color(arc_temp_gauge, lv_color_hex(0x38BDF8), LV_PART_INDICATOR); // Xanh Băng
+    } else {
+      lv_obj_set_style_arc_color(arc_temp_gauge, lv_color_hex(0x10B981), LV_PART_INDICATOR); // Xanh Ngọc Mát
+    }
+  }
+
+  // Cập nhật số liệu trung tâm trong Dial
+  String inMetricStr = String(indoorTemp, 1) + "C | " + String(indoorHum, 0) + "%";
+  if (label_in_temp && inMetricStr != last_in_metric) {
+    last_in_metric = inMetricStr;
+    lv_label_set_text(label_in_temp, inMetricStr.c_str());
+  }
+
+  String strInPres = String(indoorPres, 0);
+  if (label_in_pres && strInPres != last_in_pres) {
+    last_in_pres = strInPres;
+    lv_label_set_text(label_in_pres, strInPres.c_str());
+  }
+
+  String strOutTemp = String(owmTemp, 0) + "C";
+  if (label_out_temp && strOutTemp != last_out_temp) {
+    last_out_temp = strOutTemp;
+    lv_label_set_text(label_out_temp, strOutTemp.c_str());
+  }
+
+  if (label_relay1 && (int)relay1 != last_relay1) {
+    last_relay1 = (int)relay1;
+    lv_label_set_text(label_relay1, relay1 ? "ON" : "OFF");
     lv_obj_set_style_text_color(label_relay1, relay1 ? lv_color_hex(0x10B981) : lv_color_hex(0xEF4444), 0);
   }
   
-  if (label_relay2) {
-    lv_label_set_text_fmt(label_relay2, "R2: %s", relay2 ? "ON" : "OFF");
+  if (label_relay2 && (int)relay2 != last_relay2) {
+    last_relay2 = (int)relay2;
+    lv_label_set_text(label_relay2, relay2 ? "ON" : "OFF");
     lv_obj_set_style_text_color(label_relay2, relay2 ? lv_color_hex(0x10B981) : lv_color_hex(0xEF4444), 0);
   }
 
+  // Hoạt ảnh Ticker xoay vòng 3 trang thông tin thông minh mượt mà (Không tốn CPU)
+  static unsigned long lastTickerStep = 0;
+  static int tickerPage = 0;
+  static String last_rendered_ticker = "";
+  unsigned long nowTicker = millis();
+  if (nowTicker - lastTickerStep >= 3500) {
+    lastTickerStep = nowTicker;
+    tickerPage = (tickerPage + 1) % 3;
+    
+    String tickerText = "";
+    if (tickerPage == 0) {
+      String desc = owmDesc.length() > 0 ? owmDesc : (ai_prediction_short.length() > 0 ? ai_prediction_short : "Troi dep");
+      tickerText = "Du bao: " + desc;
+    } else if (tickerPage == 1) {
+      tickerText = (indoorTemp > 31.0f) ? "Phong: Oi buc, nen bat dieu hoa" : ((indoorTemp < 22.0f) ? "Phong: Se lanh, giu am nha" : "Phong: Nhiet do ly tuong mat me");
+    } else {
+      tickerText = "NORI AI: San sang phuc vu ban!";
+    }
+    if (label_weather && tickerText != last_rendered_ticker) {
+      last_rendered_ticker = tickerText;
+      lv_label_set_text(label_weather, cleanDisplayText(tickerText).c_str());
+    }
+  }
+
   // Cập nhật nội dung đối thoại chia 2 bên (USER vs NORI AI)
-  if (label_user_msg && lastUserText.length() > 0) {
+  static String last_rendered_user_msg = "";
+  if (label_user_msg && lastUserText.length() > 0 && lastUserText != last_rendered_user_msg) {
+    last_rendered_user_msg = lastUserText;
     lv_label_set_text(label_user_msg, cleanDisplayText(lastUserText).c_str());
   }
-  if (label_ai_msg && !isStreamingAiText && fullAiText.length() > 0) {
+  static String last_rendered_ai_msg = "";
+  if (label_ai_msg && !isStreamingAiText && fullAiText.length() > 0 && fullAiText != last_rendered_ai_msg) {
+    last_rendered_ai_msg = fullAiText;
     String disp = fullAiText.substring(streamDisplayStartIndex);
     disp.trim();
     lv_label_set_text(label_ai_msg, cleanDisplayText(disp).c_str());
@@ -352,14 +427,16 @@ void updateLVGL_UI() {
 // ==========================================
 
 // Callback hoạt họa AI Orb và dòng chữ chạy theo giọng nói (Typewriter Streaming)
+// Callback hoạt họa AI Orb, Soundwave Spectrum và dòng chữ chạy theo giọng nói (Typewriter Streaming)
+static lv_obj_t * ai_wave_bar[7];
+
 static void ai_orb_anim_cb(lv_timer_t * timer) {
-  // 1. Dòng chữ AI xuất hiện dần dần theo nhịp nói (Typewriter Stream với tính năng Auto-Paging cuộn về đầu ô khi viết đầy)
+  if (lv_screen_active() != screen_ai) return; // Bỏ qua nếu không ở màn hình AI
+  
+  // 1. Dòng chữ AI xuất hiện mượt mà từng ký tự theo nhịp nói (Typewriter Stream với tính năng Auto-Paging)
   if (isStreamingAiText && label_ai_msg) {
     if (streamCharIndex < (int)fullAiText.length()) {
-      streamCharIndex += 2; // Nhảy 2 ký tự mỗi 70ms (~28 ký tự/giây theo nhịp nói TTS)
-      if (streamCharIndex > (int)fullAiText.length()) {
-        streamCharIndex = fullAiText.length();
-      }
+      streamCharIndex += 1; // Từng ký tự một cách mượt mà tự nhiên
 
       // Khi đoạn chữ trong ô AI đạt đến giới hạn chiều cao hiển thị (~55 ký tự = 5-6 dòng)
       // Tự động tìm dấu ngắt từ gần nhất để cuộn trang và viết tiếp bắt đầu từ dòng đầu tiên!
@@ -375,7 +452,7 @@ static void ai_orb_anim_cb(lv_timer_t * timer) {
         if (breakPos != -1 && breakPos > streamDisplayStartIndex) {
           streamDisplayStartIndex = breakPos;
         } else {
-          streamDisplayStartIndex = streamCharIndex - 2;
+          streamDisplayStartIndex = streamCharIndex - 1;
         }
       }
 
@@ -390,7 +467,22 @@ static void ai_orb_anim_cb(lv_timer_t * timer) {
     }
   }
 
-  // 2. Cập nhật biểu cảm khuôn mặt AI Orb tròn nhỏ
+  // 2. Cập nhật dải sóng âm Mini Cyber Soundwave (7 cột)
+  for (int i = 0; i < 7; i++) {
+    if (ai_wave_bar[i]) {
+      if (current_ai_state == AI_STATE_TALKING || current_ai_state == AI_STATE_LISTENING) {
+        int h = random(3, 10);
+        lv_obj_set_height(ai_wave_bar[i], h);
+      } else if (current_ai_state == AI_STATE_THINKING) {
+        int h = (i % 2 == 0) ? 5 : 2;
+        lv_obj_set_height(ai_wave_bar[i], h);
+      } else {
+        lv_obj_set_height(ai_wave_bar[i], 2);
+      }
+    }
+  }
+
+  // 3. Cập nhật biểu cảm khuôn mặt AI Orb tròn nhỏ
   if (!ai_orb_face || !ai_orb_eye_l || !ai_orb_eye_r || !ai_orb_mouth) return;
 
   static int orb_tick = 0;
@@ -435,60 +527,63 @@ static void ai_orb_anim_cb(lv_timer_t * timer) {
 
 void setupAIScreen() {
   screen_ai = lv_obj_create(NULL);
-  lv_obj_set_style_bg_color(screen_ai, lv_color_hex(0x030712), 0); // Obsidian Black Void
+  lv_obj_set_style_bg_color(screen_ai, lv_color_hex(0x020617), 0); // Deep Obsidian Slate
+  lv_obj_set_scrollbar_mode(screen_ai, LV_SCROLLBAR_MODE_OFF);
   
   // =========================================================================
-  // TOP BAR HEADER: CUTE ANIMATED AI ORB + TITLE + LIVE STATUS BADGE
+  // 1. TOP BAR HEADER: SHADCN/UI STYLE GLASS NAVBAR
   // =========================================================================
   lv_obj_t * top_bar = lv_obj_create(screen_ai);
-  lv_obj_set_size(top_bar, 156, 22);
+  lv_obj_set_size(top_bar, 156, 21);
   lv_obj_align(top_bar, LV_ALIGN_TOP_MID, 0, 2);
-  lv_obj_set_style_bg_color(top_bar, lv_color_hex(0x0B132B), 0);
+  lv_obj_set_style_bg_color(top_bar, lv_color_hex(0x081224), 0);
   lv_obj_set_style_border_width(top_bar, 1, 0);
   lv_obj_set_style_border_color(top_bar, lv_color_hex(0x1E293B), 0);
-  lv_obj_set_style_radius(top_bar, 8, 0);
-  lv_obj_set_style_pad_all(top_bar, 0, 0);
+  lv_obj_set_style_radius(top_bar, 10, 0);
+  lv_obj_set_style_pad_all(top_bar, 1, 0);
+  lv_obj_set_scrollbar_mode(top_bar, LV_SCROLLBAR_MODE_OFF);
 
-  // 1. Cute Round Animated AI Orb (18x18 circle)
+  // Cute Round Animated AI Orb (16x16 circle with neon cyan glow ring)
   ai_orb_face = lv_obj_create(top_bar);
-  lv_obj_set_size(ai_orb_face, 18, 18);
+  lv_obj_set_size(ai_orb_face, 16, 16);
   lv_obj_align(ai_orb_face, LV_ALIGN_LEFT_MID, 2, 0);
   lv_obj_set_style_radius(ai_orb_face, LV_RADIUS_CIRCLE, 0);
-  lv_obj_set_style_bg_color(ai_orb_face, lv_color_hex(0x0F172A), 0);
+  lv_obj_set_style_bg_color(ai_orb_face, lv_color_hex(0x040D1E), 0);
   lv_obj_set_style_border_width(ai_orb_face, 1, 0);
   lv_obj_set_style_border_color(ai_orb_face, lv_color_hex(0x00F0FF), 0); // Cyan Neon Glow
   lv_obj_set_style_pad_all(ai_orb_face, 0, 0);
+  lv_obj_set_scrollbar_mode(ai_orb_face, LV_SCROLLBAR_MODE_OFF);
 
   // Mini Eyes & Mouth inside Orb
   ai_orb_eye_l = lv_obj_create(ai_orb_face);
-  lv_obj_set_size(ai_orb_eye_l, 3, 4);
-  lv_obj_set_style_radius(ai_orb_eye_l, 2, 0);
+  lv_obj_set_size(ai_orb_eye_l, 3, 3);
+  lv_obj_set_style_radius(ai_orb_eye_l, 1, 0);
   lv_obj_set_style_bg_color(ai_orb_eye_l, lv_color_hex(0x00F0FF), 0);
   lv_obj_set_style_border_width(ai_orb_eye_l, 0, 0);
-  lv_obj_align(ai_orb_eye_l, LV_ALIGN_TOP_LEFT, 3, 4);
+  lv_obj_align(ai_orb_eye_l, LV_ALIGN_TOP_LEFT, 2, 3);
 
   ai_orb_eye_r = lv_obj_create(ai_orb_face);
-  lv_obj_set_size(ai_orb_eye_r, 3, 4);
-  lv_obj_set_style_radius(ai_orb_eye_r, 2, 0);
+  lv_obj_set_size(ai_orb_eye_r, 3, 3);
+  lv_obj_set_style_radius(ai_orb_eye_r, 1, 0);
   lv_obj_set_style_bg_color(ai_orb_eye_r, lv_color_hex(0x00F0FF), 0);
   lv_obj_set_style_border_width(ai_orb_eye_r, 0, 0);
-  lv_obj_align(ai_orb_eye_r, LV_ALIGN_TOP_RIGHT, -3, 4);
+  lv_obj_align(ai_orb_eye_r, LV_ALIGN_TOP_RIGHT, -2, 3);
 
   ai_orb_mouth = lv_obj_create(ai_orb_face);
-  lv_obj_set_size(ai_orb_mouth, 6, 2);
-  lv_obj_set_style_radius(ai_orb_mouth, 2, 0);
+  lv_obj_set_size(ai_orb_mouth, 5, 2);
+  lv_obj_set_style_radius(ai_orb_mouth, 1, 0);
   lv_obj_set_style_bg_color(ai_orb_mouth, lv_color_hex(0x00F0FF), 0);
   lv_obj_set_style_border_width(ai_orb_mouth, 0, 0);
   lv_obj_align(ai_orb_mouth, LV_ALIGN_BOTTOM_MID, 0, -2);
 
-  // 2. Title "NORI AI"
+  // Title "NORI AI"
   lv_obj_t * title = lv_label_create(top_bar);
   lv_obj_set_style_text_color(title, lv_color_hex(0x00F0FF), 0);
   lv_obj_set_style_text_font(title, &lv_font_montserrat_10, 0);
   lv_label_set_text(title, "NORI AI");
-  lv_obj_align(title, LV_ALIGN_LEFT_MID, 23, 0);
+  lv_obj_align(title, LV_ALIGN_LEFT_MID, 21, 0);
 
-  // 3. Status Badge with animated color dot (Right aligned in top bar)
+  // Status Badge with animated color dot (Right aligned in top bar)
   ai_status_dot = lv_obj_create(top_bar);
   lv_obj_set_size(ai_status_dot, 5, 5);
   lv_obj_set_style_radius(ai_status_dot, LV_RADIUS_CIRCLE, 0);
@@ -503,49 +598,86 @@ void setupAIScreen() {
   lv_label_set_text(label_ai_status, "SAN SANG");
 
   // =========================================================================
-  // DIALOGUE CARDS (SPLIT VIEW): USER (LEFT) vs NORI AI (RIGHT)
+  // 2. SOUNDWAVE VISUALIZER BAR (7 Bars across 156px)
   // =========================================================================
-  // 1. KHUNG BÊN TRÁI: NGƯỜI DÙNG NÓI (USER)
+  lv_obj_t * wave_cont = lv_obj_create(screen_ai);
+  lv_obj_set_size(wave_cont, 156, 10);
+  lv_obj_align(wave_cont, LV_ALIGN_TOP_MID, 0, 24);
+  lv_obj_set_style_bg_opa(wave_cont, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(wave_cont, 0, 0);
+  lv_obj_set_style_pad_all(wave_cont, 0, 0);
+  lv_obj_set_scrollbar_mode(wave_cont, LV_SCROLLBAR_MODE_OFF);
+  lv_obj_set_layout(wave_cont, LV_LAYOUT_FLEX);
+  lv_obj_set_flex_flow(wave_cont, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(wave_cont, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+  const uint32_t wave_colors[7] = {0x00F0FF, 0x10B981, 0x38BDF8, 0xA855F7, 0x38BDF8, 0x10B981, 0x00F0FF};
+  for (int i = 0; i < 7; i++) {
+    ai_wave_bar[i] = lv_obj_create(wave_cont);
+    lv_obj_set_size(ai_wave_bar[i], 12, 2);
+    lv_obj_set_style_bg_color(ai_wave_bar[i], lv_color_hex(wave_colors[i]), 0);
+    lv_obj_set_style_radius(ai_wave_bar[i], 1, 0);
+    lv_obj_set_style_border_width(ai_wave_bar[i], 0, 0);
+  }
+
+  // =========================================================================
+  // 3. DIALOGUE CARDS (SPLIT VIEW): USER (LEFT) vs NORI AI (RIGHT)
+  // =========================================================================
+  // 1. KHUNG BÊN TRÁI: NGƯỜI DÙNG NÓI (USER - SHADCN STYLE)
   lv_obj_t * card_user = lv_obj_create(screen_ai);
-  lv_obj_set_size(card_user, 75, 100);
-  lv_obj_align(card_user, LV_ALIGN_TOP_LEFT, 2, 26);
-  lv_obj_set_style_bg_color(card_user, lv_color_hex(0x06251C), 0); // Dark Emerald Glass
+  lv_obj_set_size(card_user, 76, 91);
+  lv_obj_align(card_user, LV_ALIGN_TOP_LEFT, 2, 35);
+  lv_obj_set_style_bg_color(card_user, lv_color_hex(0x051F16), 0); // Dark Emerald Slate
   lv_obj_set_style_border_width(card_user, 1, 0);
   lv_obj_set_style_border_color(card_user, lv_color_hex(0x10B981), 0); // Emerald Border
-  lv_obj_set_style_radius(card_user, 6, 0);
+  lv_obj_set_style_radius(card_user, 8, 0);
   lv_obj_set_style_pad_all(card_user, 2, 0);
   lv_obj_set_scrollbar_mode(card_user, LV_SCROLLBAR_MODE_OFF);
 
+  lv_obj_t * dot_user = lv_obj_create(card_user);
+  lv_obj_set_size(dot_user, 4, 4);
+  lv_obj_set_style_radius(dot_user, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_color(dot_user, lv_color_hex(0x10B981), 0);
+  lv_obj_set_style_border_width(dot_user, 0, 0);
+  lv_obj_align(dot_user, LV_ALIGN_TOP_LEFT, 2, 4);
+
   lv_obj_t * title_user = lv_label_create(card_user);
-  lv_obj_set_style_text_color(title_user, lv_color_hex(0x34D399), 0); // Vibrant Green
+  lv_obj_set_style_text_color(title_user, lv_color_hex(0x34D399), 0); // Vibrant Mint Green
   lv_obj_set_style_text_font(title_user, &lv_font_montserrat_10, 0);
   lv_label_set_text(title_user, "USER");
-  lv_obj_align(title_user, LV_ALIGN_TOP_LEFT, 2, 1);
+  lv_obj_align(title_user, LV_ALIGN_TOP_LEFT, 9, 1);
 
   label_user_msg = lv_label_create(card_user);
   lv_obj_set_style_text_color(label_user_msg, lv_color_hex(0xF1F5F9), 0);
   lv_obj_set_style_text_font(label_user_msg, &lv_font_montserrat_10, 0);
   lv_label_set_long_mode(label_user_msg, LV_LABEL_LONG_WRAP);
-  lv_obj_set_width(label_user_msg, 69);
+  lv_obj_set_width(label_user_msg, 70);
   lv_obj_align(label_user_msg, LV_ALIGN_TOP_LEFT, 2, 14);
   lv_label_set_text(label_user_msg, cleanDisplayText(lastUserText).c_str());
 
-  // 2. KHUNG BÊN PHẢI: AI TRẢ LỜI (NORI AI)
+  // 2. KHUNG BÊN PHẢI: AI TRẢ LỜI (NORI AI - SHADCN STYLE)
   lv_obj_t * card_ai = lv_obj_create(screen_ai);
-  lv_obj_set_size(card_ai, 77, 100);
-  lv_obj_align(card_ai, LV_ALIGN_TOP_RIGHT, -2, 26);
-  lv_obj_set_style_bg_color(card_ai, lv_color_hex(0x0A1C38), 0); // Dark Cyber Navy
+  lv_obj_set_size(card_ai, 77, 91);
+  lv_obj_align(card_ai, LV_ALIGN_TOP_RIGHT, -2, 35);
+  lv_obj_set_style_bg_color(card_ai, lv_color_hex(0x061830), 0); // Deep Cyber Indigo
   lv_obj_set_style_border_width(card_ai, 1, 0);
-  lv_obj_set_style_border_color(card_ai, lv_color_hex(0x00F0FF), 0); // Cyan Neon Border
-  lv_obj_set_style_radius(card_ai, 6, 0);
+  lv_obj_set_style_border_color(card_ai, lv_color_hex(0x00F0FF), 0); // Cyan Neon Glow Border
+  lv_obj_set_style_radius(card_ai, 8, 0);
   lv_obj_set_style_pad_all(card_ai, 2, 0);
   lv_obj_set_scrollbar_mode(card_ai, LV_SCROLLBAR_MODE_OFF);
+
+  lv_obj_t * dot_ai = lv_obj_create(card_ai);
+  lv_obj_set_size(dot_ai, 4, 4);
+  lv_obj_set_style_radius(dot_ai, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_color(dot_ai, lv_color_hex(0x00F0FF), 0);
+  lv_obj_set_style_border_width(dot_ai, 0, 0);
+  lv_obj_align(dot_ai, LV_ALIGN_TOP_LEFT, 2, 4);
 
   lv_obj_t * title_ai = lv_label_create(card_ai);
   lv_obj_set_style_text_color(title_ai, lv_color_hex(0x00F0FF), 0); // Neon Cyan
   lv_obj_set_style_text_font(title_ai, &lv_font_montserrat_10, 0);
   lv_label_set_text(title_ai, "NORI AI");
-  lv_obj_align(title_ai, LV_ALIGN_TOP_LEFT, 2, 1);
+  lv_obj_align(title_ai, LV_ALIGN_TOP_LEFT, 9, 1);
 
   label_ai_msg = lv_label_create(card_ai);
   lv_obj_set_style_text_color(label_ai_msg, lv_color_hex(0xF1F5F9), 0);
@@ -555,9 +687,9 @@ void setupAIScreen() {
   lv_obj_align(label_ai_msg, LV_ALIGN_TOP_LEFT, 2, 14);
   lv_label_set_text(label_ai_msg, cleanDisplayText(streamAiText).c_str());
 
-  // Khởi tạo Timer chạy hoạt họa AI Orb & Typewriter Stream Text (70ms)
+  // Khởi tạo Timer chạy hoạt họa AI Orb & Typewriter Stream Text (40ms cực mượt)
   if (ai_orb_anim_timer == NULL) {
-    ai_orb_anim_timer = lv_timer_create(ai_orb_anim_cb, 70, NULL);
+    ai_orb_anim_timer = lv_timer_create(ai_orb_anim_cb, 40, NULL);
   }
 }
 
@@ -643,41 +775,89 @@ void setAIFaceEmotion(String emotion) {
 }
 
 // ==========================================
-// 4. MÀN HÌNH HỌC LỆNH HỒNG NGOẠI (IR LEARNING)
+// 4. MÀN HÌNH HỌC LỆNH HỒNG NGOẠI (IR CONTROL & LEARN - GUNA / BUNIFU UI)
 // ==========================================
 void setupIrScreen() {
   screen_ir = lv_obj_create(NULL);
-  lv_obj_set_style_bg_color(screen_ir, lv_color_hex(0x050914), 0);
+  lv_obj_set_style_bg_color(screen_ir, lv_color_hex(0x020617), 0); // Deep Obsidian Slate
+  lv_obj_set_scrollbar_mode(screen_ir, LV_SCROLLBAR_MODE_OFF);
 
-  // Header Title
-  label_ir_title = lv_label_create(screen_ir);
+  // =========================================================================
+  // 1. HEADER BAR: GUNA UI STYLE ROUNDED CRIMSON CAPSULE
+  // =========================================================================
+  lv_obj_t * header_capsule = lv_obj_create(screen_ir);
+  lv_obj_set_size(header_capsule, 156, 20);
+  lv_obj_align(header_capsule, LV_ALIGN_TOP_MID, 0, 2);
+  lv_obj_set_style_bg_color(header_capsule, lv_color_hex(0x0F172A), 0);
+  lv_obj_set_style_border_width(header_capsule, 1, 0);
+  lv_obj_set_style_border_color(header_capsule, lv_color_hex(0xEF4444), 0); // Neon Crimson Glow
+  lv_obj_set_style_radius(header_capsule, 10, 0);
+  lv_obj_set_style_pad_all(header_capsule, 1, 0);
+  lv_obj_set_scrollbar_mode(header_capsule, LV_SCROLLBAR_MODE_OFF);
+
+  lv_obj_t * ir_dot = lv_obj_create(header_capsule);
+  lv_obj_set_size(ir_dot, 5, 5);
+  lv_obj_set_style_radius(ir_dot, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_color(ir_dot, lv_color_hex(0xEF4444), 0);
+  lv_obj_set_style_border_width(ir_dot, 0, 0);
+  lv_obj_align(ir_dot, LV_ALIGN_LEFT_MID, 4, 0);
+
+  label_ir_title = lv_label_create(header_capsule);
   lv_obj_set_style_text_color(label_ir_title, lv_color_hex(0xEF4444), 0); // Crimson
-  lv_obj_set_style_text_font(label_ir_title, &lv_font_montserrat_12, 0);
-  lv_label_set_text(label_ir_title, "IR LEARNING MODE");
-  lv_obj_align(label_ir_title, LV_ALIGN_TOP_MID, 0, 8);
+  lv_obj_set_style_text_font(label_ir_title, &lv_font_montserrat_10, 0);
+  lv_label_set_text(label_ir_title, "IR CONTROL & LEARN");
+  lv_obj_align(label_ir_title, LV_ALIGN_CENTER, 0, 0);
 
-  // Info Container Card
+  // =========================================================================
+  // 2. CENTRAL CONTROL DECK: BUNIFU UI DARK GLASS CARD
+  // =========================================================================
   lv_obj_t * ir_card = lv_obj_create(screen_ir);
-  lv_obj_set_size(ir_card, 148, 64);
-  lv_obj_align(ir_card, LV_ALIGN_CENTER, 0, 2);
-  lv_obj_set_style_bg_color(ir_card, lv_color_hex(0x0F172A), 0);
+  lv_obj_set_size(ir_card, 156, 78);
+  lv_obj_align(ir_card, LV_ALIGN_TOP_MID, 0, 24);
+  lv_obj_set_style_bg_color(ir_card, lv_color_hex(0x081120), 0);
   lv_obj_set_style_border_width(ir_card, 1, 0);
   lv_obj_set_style_border_color(ir_card, lv_color_hex(0x1E293B), 0);
-  lv_obj_set_style_radius(ir_card, 6, 0);
-  lv_obj_set_style_pad_all(ir_card, 4, 0);
+  lv_obj_set_style_radius(ir_card, 10, 0);
+  lv_obj_set_style_pad_all(ir_card, 3, 0);
+  lv_obj_set_scrollbar_mode(ir_card, LV_SCROLLBAR_MODE_OFF);
 
-  label_ir_info = lv_label_create(ir_card);
+  // Inner Monospace Code Tile
+  lv_obj_t * inner_tile = lv_obj_create(ir_card);
+  lv_obj_set_size(inner_tile, 148, 70);
+  lv_obj_align(inner_tile, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_set_style_bg_color(inner_tile, lv_color_hex(0x030814), 0);
+  lv_obj_set_style_border_width(inner_tile, 1, 0);
+  lv_obj_set_style_border_color(inner_tile, lv_color_hex(0x1E293B), 0);
+  lv_obj_set_style_radius(inner_tile, 6, 0);
+  lv_obj_set_style_pad_all(inner_tile, 3, 0);
+  lv_obj_set_scrollbar_mode(inner_tile, LV_SCROLLBAR_MODE_OFF);
+
+  label_ir_info = lv_label_create(inner_tile);
   lv_obj_set_style_text_color(label_ir_info, lv_color_hex(0xF8FAFC), 0);
   lv_obj_set_style_text_font(label_ir_info, &lv_font_montserrat_10, 0);
-  lv_label_set_text(label_ir_info, "Waiting for IR signal...");
+  lv_label_set_long_mode(label_ir_info, LV_LABEL_LONG_WRAP);
+  lv_obj_set_width(label_ir_info, 142);
+  lv_label_set_text(label_ir_info, "Dang cho tin hieu Hong Ngoai...");
   lv_obj_align(label_ir_info, LV_ALIGN_CENTER, 0, 0);
 
-  // Footer Navigation Hint
-  lv_obj_t * label_ir_help = lv_label_create(screen_ir);
-  lv_obj_set_style_text_color(label_ir_help, lv_color_hex(0x94A3B8), 0);
+  // =========================================================================
+  // 3. FOOTER SEGMENTED PILL BAR (B1, B2, B3)
+  // =========================================================================
+  lv_obj_t * footer_bar = lv_obj_create(screen_ir);
+  lv_obj_set_size(footer_bar, 156, 21);
+  lv_obj_align(footer_bar, LV_ALIGN_BOTTOM_MID, 0, -2);
+  lv_obj_set_style_bg_color(footer_bar, lv_color_hex(0x081020), 0);
+  lv_obj_set_style_border_width(footer_bar, 1, 0);
+  lv_obj_set_style_border_color(footer_bar, lv_color_hex(0x1E293B), 0);
+  lv_obj_set_style_radius(footer_bar, 10, 0);
+  lv_obj_set_style_pad_all(footer_bar, 1, 0);
+  lv_obj_set_scrollbar_mode(footer_bar, LV_SCROLLBAR_MODE_OFF);
+
+  lv_obj_t * label_ir_help = lv_label_create(footer_bar);
+  lv_obj_set_style_text_color(label_ir_help, lv_color_hex(0x38BDF8), 0);
   lv_obj_set_style_text_font(label_ir_help, &lv_font_montserrat_10, 0);
-  lv_label_set_text(label_ir_help, "B1: Next | B2: Send | B3: Exit");
-  lv_obj_align(label_ir_help, LV_ALIGN_BOTTOM_MID, 0, -4);
+  lv_label_set_text(label_ir_help, "B1: Chon  |  B2: Phat  |  B3: Thoat");
+  lv_obj_align(label_ir_help, LV_ALIGN_CENTER, 0, 0);
 }
 
 void showIrScreen() {
@@ -690,22 +870,29 @@ void showIrScreen() {
 void updateIrScreen(int index, String protocol, String hexCode) {
   if (label_ir_info) {
     if (index >= 10 && index <= 13) {
-      String info = "Daikin AC: " + String(daikin_power ? "ON" : "OFF") + "\n";
-      info += "Temp: " + String(daikin_temp) + "C | Fan: ";
+      String info = "DAIKIN AC: " + String(daikin_power ? "DANG BAT" : "DANG TAT") + "\n";
+      info += "Nhiet: " + String(daikin_temp) + "C | Gio: ";
       if (daikin_fan == 10) info += "Auto\n";
       else if (daikin_fan == 11) info += "Quiet\n";
-      else info += "Speed " + String(daikin_fan) + "\n";
+      else info += "So " + String(daikin_fan) + "\n";
 
-      if (index == 10) info += "> Toggle Power (Btn 2)";
-      else if (index == 11) info += "> Temp UP (Btn 2)";
-      else if (index == 12) info += "> Temp DOWN (Btn 2)";
-      else if (index == 13) info += "> Fan Speed (Btn 2)";
+      if (index == 10) info += "> Nguon AC (B2)";
+      else if (index == 11) info += "> Tang Nhiet (B2)";
+      else if (index == 12) info += "> Giam Nhiet (B2)";
+      else if (index == 13) info += "> Toc Do Gio (B2)";
       
       lv_label_set_text(label_ir_info, info.c_str());
     } else {
-      String info = "Slot " + String(index + 1) + "/10\n";
-      info += "Type: " + protocol + "\n";
-      info += "Hex: 0x" + hexCode;
+      String slotName = "";
+      if (index == 0) slotName = "Phim 1: Tat Quat";
+      else if (index == 1) slotName = "Phim 2: Bat/Tang Quat";
+      else if (index == 2) slotName = "Phim 3: Dao Gio Quat";
+      else if (index == 3) slotName = "Phim 4: Den Ngu";
+      else slotName = "Phim Tuy Chinh " + String(index + 1);
+
+      String info = "Chuc nang: " + slotName + "\n";
+      info += "Giao thuc: " + protocol + "\n";
+      info += "Ma Hex: 0x" + hexCode;
       lv_label_set_text(label_ir_info, info.c_str());
     }
   }
@@ -832,7 +1019,6 @@ void initTftBacklight() {
   ledcAttachPin(TFT_LED, TFT_LED_CHANNEL);
   ledcWrite(TFT_LED_CHANNEL, 255);
 #endif
-  digitalWrite(TFT_LED, HIGH); // Đảm bảo mức cao vững chắc tuyệt đối
 }
 
 void setTftBacklight(uint8_t brightness) {

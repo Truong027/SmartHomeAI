@@ -16,8 +16,8 @@ function runMiddleware(req, res, fn) {
   });
 }
 
-// API Key của Groq do bạn cung cấp
-const GROQ_API_KEY = "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";
+// API Key của Groq lấy từ biến môi trường
+const GROQ_API_KEY = process.env.GROQ_API_KEY || "YOUR_GROQ_API_KEY";
 
 module.exports = async function handler(req, res) {
   // Bật CORS

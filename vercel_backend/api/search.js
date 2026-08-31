@@ -15,10 +15,9 @@ function runMiddleware(req, res, fn) {
 }
 
 const GROQ_KEYS = [
-  "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",
-  "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"
+  process.env.GROQ_API_KEY || "YOUR_GROQ_API_KEY"
 ];
-const OWM_API_KEY = "6e117d37cbcacbcef8db7c37ca75044e";
+const OWM_API_KEY = process.env.OPENWEATHER_API_KEY || "6e117d37cbcacbcef8db7c37ca75044e";
 
 // Từ điển mapping các thành phố/quốc gia thông dụng tiếng Việt sang tên chuẩn quốc tế cho OpenWeatherMap
 const CITY_MAPPINGS = {
@@ -680,6 +679,7 @@ ${contextText ? `DỮ LIỆU TRA CỨU TRI THỨC VÀ BÁCH KHOA TOÀN THƯ TH�
 
 QUY TẮC PHẢN HỒI KHOA HỌC, ĐẦY ĐỦ VÀ CHÍNH XÁC:
 1. TRẢ LỜI ĐẦY ĐỦ, CỤ THỂ VÀ TỰ TIN VỀ MỌI THÔNG TIN ĐƯỢC HỎI:
+   - Đối với câu hỏi về công nghệ vi điều khiển, trí tuệ nhân tạo biên, lập trình (như Edge Impulse, TensorFlow Lite for Microcontrollers, Arduino IDE, ESP32, C++): Cung cấp câu trả lời chuẩn xác và chi tiết kỹ thuật. Nêu rõ nguyên lý thu thập mẫu giọng nói hay cảm biến, huấn luyện mô hình học máy trên nền tảng đám mây và xuất thư viện C++ tối ưu để nạp thẳng vào Arduino IDE chạy trên vi điều khiển.
    - Đối với câu hỏi về nhân vật, YouTuber, nghệ sĩ, kênh truyền thông: Nêu rõ tên thật, nghệ danh, năm sinh/quê quán, nội dung hoạt động nổi bật, số lượng người đăng ký / người theo dõi thực tế trên YouTube/mạng xã hội và các thành tựu (Nút Vàng, Nút Kim Cương nếu có).
    - Đối với câu hỏi về động vật, thực vật, sinh học: BẮT BUỘC trả lời đúng phân loại sinh học chuẩn xác (Ví dụ: Rắn là loài động vật bò sát có vảy, không chân, thuộc phân bộ Serpentes; Cá heo là động vật có vú thuộc bộ Cá voi; Voi là động vật có vú thuộc bộ Có vòi). TUYỆT ĐỐI KHÔNG nhầm lẫn hoặc gán ghép các loài khác nhau.
    - Đối với câu hỏi về hóa học, y học, dược phẩm (như Natri Clorid 0,9%, Nước muối sinh lý): Nêu rõ thành phần, công thức, cơ chế nồng độ đẳng trương, công dụng và cách dùng an toàn.

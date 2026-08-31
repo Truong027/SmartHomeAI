@@ -150,7 +150,8 @@ inline LunarDateC convertSolar2LunarC(int dd, int mm, int yy, int timeZone = 7) 
 
 inline void setupSensors() {
   Wire.begin(I2C_SDA, I2C_SCL);
-  Serial.printf("🔍 [I2C Setup] SDA Pin: %d, SCL Pin: %d\n", I2C_SDA, I2C_SCL);
+  Wire.setClock(400000); // 400kHz Fast I2C Mode giúp đọc cảm biến < 1ms không gây khựng hệ thống
+  Serial.printf("🔍 [I2C Setup] SDA Pin: %d, SCL Pin: %d (400kHz Fast Mode)\n", I2C_SDA, I2C_SCL);
 
   if (aht.begin(&Wire)) {
     Serial.println("✅ [AHT20/30] Tìm thấy cảm biến nhiệt ẩm AHT20/30!");
@@ -182,102 +183,91 @@ inline void setupSensors() {
 }
 
 inline void updateSensors() {
-  static unsigned long lastSensorUpdate = 0;
   unsigned long nowMs = millis();
-  if (nowMs - lastSensorUpdate < 1000) return; // Throttled: Giới hạn tối đa 1Hz để không làm nghẽn I2C & CPU
-  lastSensorUpdate = nowMs;
 
-  static unsigned long lastLog = 0;
-  bool doLog = (nowMs - lastLog >= 3000);
-  if (doLog) {
-    lastLog = nowMs;
-    Serial.println("\n----------------- 📊 BÁO CÁO CẢM BIẾN & RTC -----------------");
-  }
+  // 1. Đọc RTC DS3231 mỗi 1 giây (Thời gian thực thi siêu tốc: < 0.15ms)
+  static unsigned long lastRtcUpdate = 0;
+  if (nowMs - lastRtcUpdate >= 1000) {
+    lastRtcUpdate = nowMs;
+    if (rtc_ready || rtc.begin(&Wire)) {
+      rtc_ready = true;
+      DateTime nowRtc = rtc.now();
+      char timeBuf[16], dateBuf[16];
+      snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", nowRtc.hour(), nowRtc.minute());
+      snprintf(dateBuf, sizeof(dateBuf), "%02d/%02d", nowRtc.day(), nowRtc.month());
+      
+      hhmmText = String(timeBuf);
+      dateSolar = String(dateBuf);
 
-  // 1. Đọc RTC DS3231
-  if (rtc_ready || rtc.begin(&Wire)) {
-    rtc_ready = true;
-    DateTime nowRtc = rtc.now();
-    char timeBuf[16], dateBuf[16];
-    snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", nowRtc.hour(), nowRtc.minute());
-    snprintf(dateBuf, sizeof(dateBuf), "%02d/%02d", nowRtc.day(), nowRtc.month());
-    
-    hhmmText = String(timeBuf);
-    dateSolar = String(dateBuf);
-
-    // Tính toán Âm Lịch Thiên Văn
-    static int lastComputedDay = -1;
-    if (lastComputedDay != nowRtc.day() && nowRtc.year() >= 2024) {
-      lastComputedDay = nowRtc.day();
-      LunarDateC lDate = convertSolar2LunarC(nowRtc.day(), nowRtc.month(), nowRtc.year(), 7);
-      lunarDay_global = lDate.day;
-      lunarMonth_global = lDate.month;
-      lunarYear_global = lDate.year;
-      canChiDay_global = lDate.canChiDay;
-      canChiYear_global = lDate.canChiYear;
-      dateLunar = String(lDate.day) + "/" + String(lDate.month) + " AL";
+      // Tính toán Âm Lịch Thiên Văn (Chỉ tính khi qua ngày mới)
+      static int lastComputedDay = -1;
+      if (lastComputedDay != nowRtc.day() && nowRtc.year() >= 2024) {
+        lastComputedDay = nowRtc.day();
+        LunarDateC lDate = convertSolar2LunarC(nowRtc.day(), nowRtc.month(), nowRtc.year(), 7);
+        lunarDay_global = lDate.day;
+        lunarMonth_global = lDate.month;
+        lunarYear_global = lDate.year;
+        canChiDay_global = lDate.canChiDay;
+        canChiYear_global = lDate.canChiYear;
+        dateLunar = String(lDate.day) + "/" + String(lDate.month) + " AL";
+      }
     }
-
-    if (doLog) {
-      Serial.printf("⏰ [RTC DS3231] Giờ: %02d:%02d:%02d | Dương lịch: %02d/%02d/%04d | Âm lịch: %02d/%02d (%s, %s)\n",
-                     nowRtc.hour(), nowRtc.minute(), nowRtc.second(),
-                     nowRtc.day(), nowRtc.month(), nowRtc.year(),
-                     lunarDay_global, lunarMonth_global,
-                     canChiDay_global.c_str(), canChiYear_global.c_str());
-    }
-  } else {
-    if (doLog) Serial.println("❌ [RTC DS3231] Lỗi đọc module RTC!");
   }
 
-  // 2. Thử lại AHT20/30
-  if (!aht_ready) {
-    if (aht.begin(&Wire)) aht_ready = true;
-  }
+  // 2. Cảm biến AHT20/30: State-Machine Bất Đồng Bộ (Non-Blocking Asynchronous) - 0ms Delay!
+  // Hoàn toàn không dùng delay(80) của thư viện Adafruit để không làm khựng LED & Chữ chạy màn hình
+  static unsigned long ahtTriggerTime = 0;
+  static bool ahtWaitingData = false;
+  static unsigned long lastAhtCycle = 0;
+
   if (aht_ready) {
-    sensors_event_t humidity, temp;
-    if (aht.getEvent(&humidity, &temp)) {
-      if (!isnan(temp.temperature) && temp.temperature > -40.0f && temp.temperature < 85.0f) {
-        indoorTemp = temp.temperature;
-        indoorHum = humidity.relative_humidity;
-        if (doLog) {
-          Serial.printf("🌡️ [AHT20/30] Nhiệt độ phòng: %.2f °C | Độ ẩm phòng: %.2f %%\n", indoorTemp, indoorHum);
+    if (!ahtWaitingData && (nowMs - lastAhtCycle >= 3000)) {
+      // Pha 1: Gửi lệnh Trigger đo (0.05ms)
+      Wire.beginTransmission(0x38);
+      Wire.write(0xAC);
+      Wire.write(0x33);
+      Wire.write(0x00);
+      Wire.endTransmission();
+      ahtTriggerTime = nowMs;
+      ahtWaitingData = true;
+      lastAhtCycle = nowMs;
+    } else if (ahtWaitingData && (nowMs - ahtTriggerTime >= 85)) {
+      // Pha 2: Đọc dữ liệu sau 85ms mà không cần delay block luồng (0.1ms)
+      ahtWaitingData = false;
+      if (Wire.requestFrom(0x38, 6) >= 6) {
+        uint8_t status = Wire.read();
+        if ((status & 0x80) == 0) { // Bit 7 == 0: Đo xong, dữ liệu sẵn sàng
+          uint32_t hum_raw = (((uint32_t)Wire.read()) << 12) | (((uint32_t)Wire.read()) << 4);
+          uint8_t b3 = Wire.read();
+          hum_raw |= (b3 >> 4);
+          uint32_t temp_raw = (((uint32_t)(b3 & 0x0F)) << 16) | (((uint32_t)Wire.read()) << 8) | ((uint32_t)Wire.read());
+
+          float hum = ((float)hum_raw * 100.0f) / 1048576.0f;
+          float temp = (((float)temp_raw * 200.0f) / 1048576.0f) - 50.0f;
+
+          if (temp > -40.0f && temp < 85.0f) indoorTemp = temp;
+          if (hum >= 0.0f && hum <= 100.0f) indoorHum = hum;
         }
       }
     }
-  } else if (doLog) {
-    Serial.println("❌ [AHT20/30] Chưa sẵn sàng");
   }
 
-  // 3. Thử lại BMP280
-  if (!bmp_ready) {
-    if (bmp.begin(0x76, 0x58) || bmp.begin(0x77, 0x58)) bmp_ready = true;
-  }
-  if (bmp_ready) {
+  // 3. Cảm biến BMP280: Đọc định kỳ mỗi 3 giây (Thời gian thực thi: < 0.2ms)
+  static unsigned long lastBmpUpdate = 0;
+  if (bmp_ready && (nowMs - lastBmpUpdate >= 3000)) {
+    lastBmpUpdate = nowMs;
     float bmpT = bmp.readTemperature();
     indoorPres = bmp.readPressure() / 100.0F; // hPa
-    if (doLog) {
-      Serial.printf("📉 [BMP280] Áp suất khí quyển: %.2f hPa | Nhiệt độ BMP: %.2f °C\n", indoorPres, bmpT);
-    }
-    if (!aht_ready && !isnan(bmpT)) {
+    if (!aht_ready && !isnan(bmpT) && bmpT > -40.0f && bmpT < 85.0f) {
       indoorTemp = bmpT;
       if (indoorHum <= 0.0f) indoorHum = 60.0f;
     }
-  } else if (doLog) {
-    Serial.println("❌ [BMP280] Chưa sẵn sàng");
   }
 
   // Giá trị an toàn nếu không tìm thấy cảm biến
   if (indoorTemp <= 0.0f) {
     indoorTemp = 28.5f;
     indoorHum = 65.0f;
-  }
-
-  if (doLog) {
-    Serial.printf("👉 [Buttons] Nút 1: %d | Nút 2: %d | Nút 3: %d\n",
-                   digitalRead(TOUCH1_PIN),
-                   digitalRead(TOUCH2_PIN),
-                   digitalRead(TOUCH3_PIN));
-    Serial.println("-------------------------------------------------------------\n");
   }
 }
 

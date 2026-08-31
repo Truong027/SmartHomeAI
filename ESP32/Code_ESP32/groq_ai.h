@@ -4,9 +4,9 @@
 #include <Arduino.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
-#include <Preferences.h>
+#include "config.h"
 
-const char* GROQ_API_KEY = "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";
+// Biến GROQ_API_KEY được khai báo trong file config.h
 const char* GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 extern Preferences preferences;

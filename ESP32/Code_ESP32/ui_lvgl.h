@@ -6,8 +6,8 @@
 #include <lvgl.h>
 #include "config.h"
 
-// Bộ nhớ đệm cho màn hình 160x128
-#define DRAW_BUF_SIZE (SCREEN_W * SCREEN_H * 2) 
+// Bộ nhớ đệm tối ưu cho màn hình 160x128 (32 dòng quét = 10KB SRAM siêu tốc)
+#define DRAW_BUF_SIZE (SCREEN_W * 32 * 2) 
 
 // Đối tượng điều khiển màn hình
 extern TFT_eSPI *tft;
@@ -19,6 +19,7 @@ extern volatile bool uiUpdatePending;
 // Các biến dữ liệu hiển thị (Được cập nhật từ Code_ESP32.ino)
 extern String hhmmText;
 extern String dateSolar;
+extern String dateLunar;
 extern float indoorTemp;
 extern float indoorHum;
 extern float indoorPres;
@@ -36,7 +37,7 @@ extern bool daikin_power;
 extern uint8_t daikin_temp;
 extern uint8_t daikin_fan;
 
-// Các đối tượng giao diện (Labels)
+// Các đối tượng giao diện (Labels & Gauges)
 extern lv_obj_t * screen_boot;
 extern lv_obj_t * screen_main;
 extern lv_obj_t * screen_ai; // Màn hình AI
@@ -54,6 +55,7 @@ extern lv_obj_t * pred_icon;
 extern lv_obj_t * label_pred;
 extern lv_obj_t * label_relay1;
 extern lv_obj_t * label_relay2;
+extern lv_obj_t * arc_temp_gauge;
 
 extern lv_obj_t * label_ir_title;
 extern lv_obj_t * label_ir_info;

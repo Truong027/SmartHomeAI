@@ -1,8 +1,7 @@
 const axios = require('axios');
 
 const GROQ_KEYS = [
-  "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",
-  "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"
+  process.env.GROQ_API_KEY || "YOUR_GROQ_API_KEY"
 ];
 
 function removeAccents(str) {

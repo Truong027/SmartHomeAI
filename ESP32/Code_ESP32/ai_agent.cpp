@@ -12,6 +12,8 @@
 #include "hw_eeprom.h"
 #include <Adafruit_NeoPixel.h>
 #include <IRsend.h>
+#include <IRrecv.h>
+#include <IRutils.h>
 #include <IRremoteESP8266.h>
 #include <Preferences.h>
 #include "hw_led.h"
@@ -21,9 +23,25 @@ extern bool firebase_ready;
 
 extern bool relay1;
 extern bool relay2;
+extern int ledBrightness;
+extern uint8_t audioVolume;
 extern bool daikin_power;
 extern uint8_t daikin_temp;
 extern void sendDaikinCommand(bool power, uint8_t temp, uint8_t fan = 10, uint8_t mode = 2);
+extern void saveSettingsToEEPROM(bool, bool, int);
+extern Adafruit_NeoPixel pixels;
+extern volatile bool uiUpdatePending;
+extern Audio audio;
+
+extern bool isMusicMode;
+extern bool is_ir_learning_mode;
+extern IRrecv irrecv;
+extern int selected_ir_idx;
+extern LearnedIR learned_ir[MAX_IR_SLOTS];
+extern void showMainScreen();
+extern void showIrScreen();
+extern void stopMusicScreen();
+extern void updateIrScreen(int slotIndex, String protocol, String hexCode);
 
 // Biến lưu trạng thái tốc độ quạt (0: tắt, 1, 2, 3)
 int current_fan_speed = 0;
@@ -282,26 +300,26 @@ void processAudioAI(uint8_t* audioData, size_t size) {
     setLedMode(1);
   }
   
-  vTaskDelay(pdMS_TO_TICKS(40)); // Nhường CPU cho IDLE0 và giải phóng socket TLS cũ
-  
-  WiFiClientSecure client;
-  client.setInsecure();
-  client.setTimeout(6000);
-  client.setHandshakeTimeout(5);
-  
-  if (!client.connect("api.groq.com", 443)) {
-    Serial.println("❌ Không thể kết nối Groq API (Thử lại...)");
-    delay(200);
+  String response = "";
+  {
+    WiFiClientSecure client;
+    client.setInsecure();
+    client.setTimeout(8000);
+    client.setHandshakeTimeout(6);
+    
     if (!client.connect("api.groq.com", 443)) {
-      Serial.println("❌ Lỗi kết nối Groq API!");
-      isAiBusy = false;
-      if (isManualVoiceTrigger) {
-        setAIFaceState(AI_STATE_IDLE);
-        setLedMode(0);
+      Serial.println("❌ Không thể kết nối Groq API (Thử lại...)");
+      vTaskDelay(pdMS_TO_TICKS(250));
+      if (!client.connect("api.groq.com", 443)) {
+        Serial.println("❌ Lỗi kết nối Groq API!");
+        isAiBusy = false;
+        if (isManualVoiceTrigger) {
+          setAIFaceState(AI_STATE_IDLE);
+          setLedMode(0);
+        }
+        return;
       }
-      return;
     }
-  }
   
   String boundary = "----ESP32Boundary";
   String head = "--" + boundary + "\r\n"
@@ -318,7 +336,7 @@ void processAudioAI(uint8_t* audioData, size_t size) {
                 "0\r\n"
                 "--" + boundary + "\r\n"
                 "Content-Disposition: form-data; name=\"prompt\"\r\n\r\n"
-                "Hi Nori. Xin chào Nori. Nori ơi. Hey Nori. Chào Nori. Bật đèn. Tắt đèn. Mở quạt. Tắt quạt. Bật điều hòa. Tắt điều hòa. Mở bài hát. Thời tiết hôm nay thế nào.\r\n"
+                "Hi Nori. Xin chào Nori. Nori ơi. Hey Nori. Chào Nori. Trở về màn hình chính. Mở remote. Học lệnh. Quay về dashboard. Trở về. Tôi muốn nghe nhạc. Mở nhạc cho tôi nghe. Phát bài hát. Bật đèn 1. Tắt đèn 1. Bật đèn 2. Tắt đèn 2. Mở quạt. Tắt quạt. Bật điều hòa. Tắt điều hòa. Tăng âm lượng. Giảm âm lượng. Độ sáng đèn. Edge Impulse. TensorFlow Lite. Arduino IDE. Thời tiết hôm nay thế nào. Âm lịch hôm nay. Cho tôi thông tin chi tiết về giá vàng ngày hôm nay. Tin tức thời sự.\r\n"
                 "--" + boundary + "--\r\n";
                 
   // audioData đã chứa sẵn 44 byte WAV header ở đầu (size đã bao gồm 44 bytes)
@@ -340,31 +358,31 @@ void processAudioAI(uint8_t* audioData, size_t size) {
     size_t chunk = min((size_t)2048, size - bytesSent);
     client.write(&audioData[bytesSent], chunk);
     bytesSent += chunk;
-    vTaskDelay(pdMS_TO_TICKS(5)); // Nhường CPU tick cho FreeRTOS IDLE0, Core 1 và TCP/IP
+    vTaskDelay(pdMS_TO_TICKS(2));
   }
-  
   client.print(tail);
   client.flush();
   
-  // Đọc phản hồi từ Groq API (Cho phép tối đa 12 giây để Whisper nhận diện câu dài)
-  String response = "";
-  unsigned long startWait = millis();
-  while (client.connected() && (millis() - startWait < 12000)) {
-    while (client.available()) {
-      response += (char)client.read();
-      startWait = millis();
+    // Đọc phản hồi từ Groq API (Cho phép tối đa 12 giây để Whisper nhận diện câu dài)
+    unsigned long startWait = millis();
+    while (client.connected() && (millis() - startWait < 12000)) {
+      while (client.available()) {
+        response += (char)client.read();
+        startWait = millis();
+      }
+      int jsonStart = response.indexOf('{');
+      int jsonEnd = response.lastIndexOf('}');
+      if (jsonStart != -1 && jsonEnd != -1 && jsonEnd > jsonStart) {
+        response = response.substring(jsonStart, jsonEnd + 1);
+        break;
+      }
+      vTaskDelay(pdMS_TO_TICKS(15));
     }
-    int jsonStart = response.indexOf('{');
-    int jsonEnd = response.lastIndexOf('}');
-    if (jsonStart != -1 && jsonEnd != -1 && jsonEnd > jsonStart) {
-      response = response.substring(jsonStart, jsonEnd + 1);
-      break;
-    }
-    vTaskDelay(pdMS_TO_TICKS(15)); // Nhường CPU cho hệ thống
-  }
+    
+    client.stop();
+  } // Giải phóng hoàn toàn mbedTLS SSL heap context trước khi gọi LLM
   
-  client.stop();
-  delay(20);
+  vTaskDelay(pdMS_TO_TICKS(250)); // Đảm bảo lwIP dọn dẹp sạch sẽ socket cũ
   
   JsonDocument doc;
   deserializeJson(doc, response);
@@ -452,6 +470,7 @@ void processAudioAI(uint8_t* audioData, size_t size) {
     uiUpdatePending = true;
 
     Serial.println("🗣️ You said: " + transcribedText);
+    vTaskDelay(pdMS_TO_TICKS(20)); // Nhường CPU cho IDLE0 reset watchdog
     sendToLLM(transcribedText);
     isAiBusy = false;
   } else {
@@ -608,17 +627,39 @@ void sendToLLM(String userText, bool isSilent) {
     normalizedGreeting = "hi nori";
   }
 
-  // 1. Nếu người dùng CHỈ CHÀO ĐƠN THUẦN (Wake Word / Greeting) -> Trả lời ngay tức thì "Dạ em nghe đây ạ!"
-  bool isPureGreeting = (normalizedGreeting == "hi nori" || normalizedGreeting == "xin chao" || normalizedGreeting == "chao nori" || 
-                         normalizedGreeting == "hello" || normalizedGreeting == "nori oi" || normalizedGreeting == "hey nori" || 
-                         normalizedGreeting == "chao em" || normalizedGreeting == "alo nori" || normalizedGreeting == "chao ban" || 
-                         normalizedGreeting == "hi" || normalizedGreeting == "hello nori" || normalizedGreeting == "xin chao nori" || 
-                         normalizedGreeting == "nori" || normalizedGreeting == "no ri" || normalizedGreeting == "no ri oi" || 
-                         normalizedGreeting == "chao nori nha" || normalizedGreeting == "hi nori nha" || normalizedGreeting == "oi nori" || 
-                         normalizedGreeting == "e nori" ||
-                         ((normalizedGreeting.indexOf("chao nori") != -1 || normalizedGreeting.indexOf("hi nori") != -1 || 
-                           normalizedGreeting.indexOf("hello nori") != -1 || normalizedGreeting.indexOf("nori oi") != -1 || 
-                           normalizedGreeting.indexOf("xin chao nori") != -1) && normalizedGreeting.length() <= 20));
+  // 🛑 KIỂM TRA Ý ĐỊNH ĐIỀU KHIỂN / CÂU HỎI KIẾN THỨC
+  // Nếu câu nói có chứa bất kỳ từ khóa ra lệnh hoặc câu hỏi nào thì TUYỆT ĐỐI KHÔNG coi là chào hỏi đơn thuần!
+  bool hasCommandIntent = (
+    cleanText.indexOf("nhac") != -1 || cleanText.indexOf("bai hat") != -1 || cleanText.indexOf("ca khuc") != -1 || cleanText.indexOf("bai") != -1 ||
+    cleanText.indexOf("den") != -1 || cleanText.indexOf("relay") != -1 || cleanText.indexOf("khoa") != -1 || cleanText.indexOf("cua") != -1 ||
+    cleanText.indexOf("quat") != -1 || cleanText.indexOf("dieu hoa") != -1 || cleanText.indexOf("may lanh") != -1 ||
+    cleanText.indexOf("nhiet do") != -1 || cleanText.indexOf("do am") != -1 || cleanText.indexOf("ap suat") != -1 ||
+    cleanText.indexOf("thoi tiet") != -1 || cleanText.indexOf("am lich") != -1 || cleanText.indexOf("may gio") != -1 ||
+    cleanText.indexOf("ngay bao nhieu") != -1 || cleanText.indexOf("ngay may") != -1 || cleanText.indexOf("am luong") != -1 ||
+    cleanText.indexOf("loa") != -1 || cleanText.indexOf("do sang") != -1 || cleanText.indexOf("sang") != -1 ||
+    cleanText.indexOf("bat") != -1 || cleanText.indexOf("tat") != -1 || cleanText.indexOf("mo") != -1 || cleanText.indexOf("dong") != -1 ||
+    cleanText.indexOf("tang") != -1 || cleanText.indexOf("giam") != -1 || cleanText.indexOf("dung") != -1 || cleanText.indexOf("ngung") != -1 ||
+    cleanText.indexOf("la gi") != -1 || cleanText.indexOf("the nao") != -1 || cleanText.indexOf("nhu the nao") != -1 || cleanText.indexOf("tai sao") != -1 ||
+    cleanText.indexOf("ai la") != -1 || cleanText.indexOf("o dau") != -1 || cleanText.indexOf("bao nhieu") != -1 || cleanText.indexOf("khi nao") != -1 ||
+    cleanText.indexOf("huong dan") != -1 || cleanText.indexOf("giai thich") != -1 || cleanText.indexOf("nghe") != -1 || cleanText.indexOf("hat") != -1 ||
+    cleanText.indexOf("tim") != -1 || cleanText.indexOf("ke") != -1 || cleanText.indexOf("chuyen") != -1 || cleanText.indexOf("nho") != -1 ||
+    cleanText.indexOf("edge impulse") != -1 || cleanText.indexOf("arduino") != -1 || cleanText.indexOf("esp32") != -1 || cleanText.indexOf("model") != -1 ||
+    cleanText.indexOf("trang thai") != -1 || cleanText.indexOf("kiem tra") != -1 || cleanText.indexOf("tinh trang") != -1
+  );
+
+  // 1. Chỉ trả lời "Dạ em nghe đây ạ!" nếu câu nói HOÀN TOÀN CHỈ LÀ LỜI CHÀO/GỌI TÊN ĐƠN THUẦN
+  bool isPureGreeting = !hasCommandIntent && (
+    normalizedGreeting == "hi nori" || normalizedGreeting == "xin chao" || normalizedGreeting == "chao nori" || 
+    normalizedGreeting == "hello" || normalizedGreeting == "nori oi" || normalizedGreeting == "hey nori" || 
+    normalizedGreeting == "chao em" || normalizedGreeting == "alo nori" || normalizedGreeting == "chao ban" || 
+    normalizedGreeting == "hi" || normalizedGreeting == "hello nori" || normalizedGreeting == "xin chao nori" || 
+    normalizedGreeting == "nori" || normalizedGreeting == "no ri" || normalizedGreeting == "no ri oi" || 
+    normalizedGreeting == "chao nori nha" || normalizedGreeting == "hi nori nha" || normalizedGreeting == "oi nori" || 
+    normalizedGreeting == "e nori" ||
+    ((normalizedGreeting.indexOf("chao nori") != -1 || normalizedGreeting.indexOf("hi nori") != -1 || 
+      normalizedGreeting.indexOf("hello nori") != -1 || normalizedGreeting.indexOf("nori oi") != -1 || 
+      normalizedGreeting.indexOf("xin chao nori") != -1) && normalizedGreeting.length() <= 15)
+  );
 
   if (isPureGreeting) {
     isWaitingFollowupCommand = true; // Bật cờ chờ câu lệnh tiếp theo
@@ -627,7 +668,7 @@ void sendToLLM(String userText, bool isSilent) {
     return;
   }
 
-  // 2. Nếu người dùng CHÀO RỒI HỎI LUÔN (Ví dụ: "Xin chào Nori, cho tôi thông tin về Lâm Vlog")
+  // 2. Nếu người dùng CHÀO RỒI HỎI LUÔN (Ví dụ: "Xin chào Nori, bật đèn cho tôi")
   // -> Cắt bỏ tiền tố chào hỏi để trích xuất đúng câu hỏi thực tế!
   const char* greetingPrefixes[] = {
     "xin chao nori", "chao nori",
@@ -660,7 +701,7 @@ void sendToLLM(String userText, bool isSilent) {
     return;
   }
 
-  // ── 1. FAST-PATH DÀNH RIÊNG CHO LỆNH ÂM NHẠC (ƯU TIÊN TUYỆT ĐỐI TRƯỚC TÌM KIẾM) ──
+  // ── 1. FAST-PATH DÀNH RIÊNG CHO LỆNH ÂM NHẠC (ƯU TIÊN TUYỆT ĐỐI) ──
   bool isStopMusic = (lowerText == "tat nhac" || lowerText == "dung nhac" || lowerText == "ngung nhac" ||
                       lowerText == "tat bai hat" || lowerText == "dung bai hat" || lowerText == "thoi hat" ||
                       lowerText == "tat loa" || lowerText == "im di" || lowerText == "stop music" ||
@@ -674,25 +715,24 @@ void sendToLLM(String userText, bool isSilent) {
     return;
   }
 
-  bool isPlayMusic = false;
-  // Bắt tất cả các kiểu yêu cầu mở nhạc / bài hát / ca khúc (V-Pop, US-UK, Quốc tế, Lofi...)
-  if (lowerText.indexOf("bai hat") != -1 || lowerText.indexOf("ca khuc") != -1 || lowerText.indexOf("bai nhac") != -1 ||
-      lowerText.indexOf("mo bai") != -1 || lowerText.indexOf("bat bai") != -1 || lowerText.indexOf("phat bai") != -1 ||
-      lowerText.indexOf("hat bai") != -1 || lowerText.indexOf("nghe bai") != -1 || lowerText.indexOf("tim bai") != -1 ||
-      lowerText.indexOf("mo nhac") != -1 || lowerText.indexOf("bat nhac") != -1 || lowerText.indexOf("phat nhac") != -1 ||
-      lowerText.indexOf("nghe nhac") != -1 || lowerText.indexOf("hat nhac") != -1 || lowerText.indexOf("tim nhac") != -1 ||
-      lowerText.indexOf("cho toi nghe") != -1 || lowerText.indexOf("cho minh nghe") != -1 || lowerText.indexOf("cho nghe") != -1 ||
-      lowerText.indexOf("mo cho toi") != -1 || lowerText.indexOf("mo cho minh") != -1 || lowerText.indexOf("mo giup") != -1 || lowerText.indexOf("mo ho") != -1 ||
-      lowerText.indexOf("bat cho toi") != -1 || lowerText.indexOf("bat cho minh") != -1 || lowerText.indexOf("bat giup") != -1 || lowerText.indexOf("bat ho") != -1 ||
-      lowerText.indexOf("phat cho toi") != -1 || lowerText.indexOf("phat cho minh") != -1 || lowerText.indexOf("phat giup") != -1 || lowerText.indexOf("phat ho") != -1 ||
-      lowerText.indexOf("muon nghe") != -1 || lowerText.indexOf("muon bat") != -1 || lowerText.indexOf("muon mo") != -1 || lowerText.indexOf("muon phat") != -1 ||
-      lowerText.startsWith("play ") || lowerText.startsWith("nhac ") || lowerText.startsWith("bai ") ||
-      ((lowerText.indexOf("mo ") != -1 || lowerText.indexOf("bat ") != -1 || lowerText.indexOf("phat ") != -1) && (lowerText.indexOf(" bai ") != -1 || lowerText.indexOf(" nhac ") != -1))) {
-    isPlayMusic = true;
-  }
+  bool isPlayMusic = (
+    lowerText.indexOf("bai hat") != -1 || lowerText.indexOf("ca khuc") != -1 || lowerText.indexOf("bai nhac") != -1 ||
+    lowerText.indexOf("mo bai") != -1 || lowerText.indexOf("bat bai") != -1 || lowerText.indexOf("phat bai") != -1 ||
+    lowerText.indexOf("hat bai") != -1 || lowerText.indexOf("nghe bai") != -1 || lowerText.indexOf("tim bai") != -1 ||
+    lowerText.indexOf("mo nhac") != -1 || lowerText.indexOf("bat nhac") != -1 || lowerText.indexOf("phat nhac") != -1 ||
+    lowerText.indexOf("nghe nhac") != -1 || lowerText.indexOf("hat nhac") != -1 || lowerText.indexOf("tim nhac") != -1 ||
+    lowerText.indexOf("cho toi nghe") != -1 || lowerText.indexOf("cho minh nghe") != -1 || lowerText.indexOf("cho nghe") != -1 ||
+    lowerText.indexOf("mo cho toi") != -1 || lowerText.indexOf("mo cho minh") != -1 || lowerText.indexOf("mo giup") != -1 || lowerText.indexOf("mo ho") != -1 ||
+    lowerText.indexOf("bat cho toi") != -1 || lowerText.indexOf("bat cho minh") != -1 || lowerText.indexOf("bat giup") != -1 || lowerText.indexOf("bat ho") != -1 ||
+    lowerText.indexOf("phat cho toi") != -1 || lowerText.indexOf("phat cho minh") != -1 || lowerText.indexOf("phat giup") != -1 || lowerText.indexOf("phat ho") != -1 ||
+    lowerText.indexOf("muon nghe") != -1 || lowerText.indexOf("muon bat") != -1 || lowerText.indexOf("muon mo") != -1 || lowerText.indexOf("muon phat") != -1 ||
+    lowerText.indexOf("toi nghe nhac") != -1 || lowerText.indexOf("toi muon nghe nhac") != -1 ||
+    lowerText.startsWith("play ") || lowerText.startsWith("nhac ") || lowerText.startsWith("bai ") ||
+    ((lowerText.indexOf("mo ") != -1 || lowerText.indexOf("bat ") != -1 || lowerText.indexOf("phat ") != -1) && (lowerText.indexOf(" bai ") != -1 || lowerText.indexOf(" nhac ") != -1))
+  );
 
   if (isPlayMusic) {
-    String songQuery = userText;
+    String songQuery = "";
     String cleanedSong = lowerText;
     cleanedSong.replace("mo giup toi", "");
     cleanedSong.replace("bat giup toi", "");
@@ -712,6 +752,13 @@ void sendToLLM(String userText, bool isSilent) {
     cleanedSong.replace("cho minh nghe", "");
     cleanedSong.replace("cho nghe bai", "");
     cleanedSong.replace("cho nghe", "");
+    cleanedSong.replace("toi muon nghe bai", "");
+    cleanedSong.replace("toi muon nghe", "");
+    cleanedSong.replace("toi muon mo", "");
+    cleanedSong.replace("toi muon bat", "");
+    cleanedSong.replace("toi muon phat", "");
+    cleanedSong.replace("toi nghe nhac", "");
+    cleanedSong.replace("toi nghe bai", "");
     cleanedSong.replace("muon nghe bai", "");
     cleanedSong.replace("muon nghe", "");
     cleanedSong.replace("muon mo", "");
@@ -736,12 +783,13 @@ void sendToLLM(String userText, bool isSilent) {
     cleanedSong.replace("ca khuc", "");
     cleanedSong.replace("bai hat", "");
     cleanedSong.replace("bai nhac", "");
-    cleanedSong.replace("bai ", "");
     cleanedSong.replace("play music", "");
     cleanedSong.replace("play ", "");
     cleanedSong.replace(" cua ", " ");
     cleanedSong.replace(" do ", " ");
     cleanedSong.replace(" boi ", " ");
+    cleanedSong.replace("hat di", "");
+    cleanedSong.replace("nghe di", "");
     
     // Tự động sửa các lỗi phát âm / phiên âm tiếng Anh phổ biến
     cleanedSong.replace("bay bay justin", "Baby Justin Bieber");
@@ -757,8 +805,22 @@ void sendToLLM(String userText, bool isSilent) {
       cleanedSong.replace("  ", " ");
     }
     cleanedSong.trim();
-    if (cleanedSong.length() > 0) {
+
+    if (cleanedSong.length() > 0 && cleanedSong != "nhac" && cleanedSong != "bai" && cleanedSong != "hat" && cleanedSong != "nghe") {
       songQuery = cleanedSong;
+    } else {
+      // Khi người dùng chỉ nói chung chung "mở nhạc", "tôi nghe nhạc", "phát nhạc"
+      const char* hotHits[] = {
+        "Lạc Trôi",
+        "Âm Thầm Bên Em",
+        "Đi Về Nhà",
+        "Cắt Đôi Nỗi Sầu",
+        "Nơi Này Có Anh",
+        "Shape of You",
+        "See You Again",
+        "Nhạc Lofi chill"
+      };
+      songQuery = hotHits[random(0, 8)];
     }
 
     Serial.println("🎵 Nhận diện lệnh phát nhạc: " + songQuery);
@@ -767,64 +829,150 @@ void sendToLLM(String userText, bool isSilent) {
     pendingSongTitle = songQuery;
     isMusicMode = true;
     if (!isSilent) {
-      playTTS("Dạ em đang tìm và phát bài " + songQuery + " cho bạn đây nè!");
+      playTTS("Dạ em đang tìm và phát bài " + songQuery + " cho bạn thưởng thức đây nè!");
     }
     return;
   }
   
-  // Tự động nhận diện mọi câu hỏi tìm kiếm kiến thức, tin tức, giá cả, giải thích, so sánh...
-  bool isDeviceCommand = (lowerText.indexOf("bat den") != -1 || lowerText.indexOf("tat den") != -1 ||
-                         lowerText.indexOf("bat quat") != -1 || lowerText.indexOf("tat quat") != -1 ||
-                         lowerText.indexOf("bat dieu hoa") != -1 || lowerText.indexOf("tat dieu hoa") != -1 ||
-                         lowerText.indexOf("bat bai") != -1 || lowerText.indexOf("mo bai") != -1 ||
-                         lowerText.indexOf("phat bai") != -1 || lowerText.indexOf("hat bai") != -1 ||
-                         lowerText.indexOf("nghe bai") != -1 || lowerText.indexOf("phat nhac") != -1 ||
-                         lowerText.indexOf("bat nhac") != -1 || lowerText.indexOf("mo nhac") != -1 ||
-                         lowerText.indexOf("tat nhac") != -1 || lowerText.indexOf("dung nhac") != -1 ||
-                         lowerText.indexOf("tang am") != -1 || lowerText.indexOf("giam am") != -1);
+  // --- FAST-PATH ĐIỀU HƯỚNG MÀN HÌNH (TRỞ VỀ / MỞ REMOTE) ---
+  if (lowerText == "tro ve" || lowerText == "quay ve" || lowerText == "ve man hinh chinh" || 
+      lowerText == "tro ve man hinh chinh" || lowerText == "man hinh chinh" || lowerText == "ve dashboard" ||
+      lowerText == "dong ai" || lowerText.indexOf("ve man hinh") != -1 || lowerText.indexOf("tro ve man hinh") != -1 ||
+      lowerText.indexOf("cho ve") != -1 || lowerText.indexOf("hanh tranh") != -1 || lowerText.indexOf("man hinh") != -1 ||
+      lowerText.indexOf("quay ve") != -1 || lowerText.indexOf("tro ve") != -1) {
+    if (audio.isRunning()) audio.stopSong();
+    isMusicMode = false;
+    if (is_ir_learning_mode) {
+      is_ir_learning_mode = false;
+      irrecv.disableIRIn();
+    }
+    stopMusicScreen();
+    showMainScreen();
+    setAIFaceState(AI_STATE_IDLE);
+    setLedMode(0);
+    uiUpdatePending = true;
+    if (!isSilent) playTTS("Đã trở về màn hình chính cho bạn rồi nhé!");
+    return;
+  } else if (lowerText == "mo remote" || lowerText == "bat remote" || lowerText == "mo dieu khien" || 
+             lowerText == "hoc lenh" || lowerText == "che do hoc lenh" || lowerText == "man hinh remote" ||
+             lowerText.indexOf("mo remote") != -1 || lowerText.indexOf("man hinh remote") != -1 || lowerText.indexOf("che do hoc lenh") != -1 ||
+             lowerText.indexOf("remote") != -1 || lowerText.indexOf("dieu khien") != -1 || lowerText.indexOf("hoc lenh") != -1) {
+    if (audio.isRunning()) audio.stopSong();
+    is_ir_learning_mode = true;
+    irrecv.enableIRIn();
+    showIrScreen();
+    updateIrScreen(selected_ir_idx, typeToString(learned_ir[selected_ir_idx].type), String((uint32_t)(learned_ir[selected_ir_idx].value & 0xFFFFFFFF), HEX));
+    uiUpdatePending = true;
+    if (!isSilent) playTTS("Đã mở màn hình điều khiển và chế độ học lệnh hồng ngoại rồi nè!");
+    return;
+  }
 
-  bool isRoomSensorQuery = (lowerText.indexOf("trong phong") != -1 || lowerText.indexOf("phong toi") != -1 ||
-                            lowerText.indexOf("trong nha") != -1 || lowerText.indexOf("nhiet do phong") != -1 ||
-                            lowerText.indexOf("do am phong") != -1 || lowerText.indexOf("ap suat phong") != -1 ||
-                            lowerText.indexOf("aht20") != -1 || lowerText.indexOf("bmp280") != -1 ||
-                            lowerText.indexOf("cam bien") != -1);
-
-  bool isSearchQuery = (lowerText.indexOf("la gi") != -1 || lowerText.indexOf("tai sao") != -1 ||
-                        lowerText.indexOf("the nao") != -1 || lowerText.indexOf("nhu the nao") != -1 ||
-                        lowerText.indexOf("ai la") != -1 || lowerText.indexOf("khi nao") != -1 ||
-                        lowerText.indexOf("o dau") != -1 || lowerText.indexOf("bao nhieu") != -1 ||
-                        lowerText.indexOf("giai thich") != -1 || lowerText.indexOf("tim kiem") != -1 ||
-                        lowerText.indexOf("gia vang") != -1 || lowerText.indexOf("tin tuc") != -1 ||
-                        lowerText.indexOf("phan tich") != -1 || lowerText.indexOf("cho biet") != -1 ||
-                        lowerText.indexOf("huong dan") != -1 || lowerText.indexOf("so sanh") != -1 ||
-                        lowerText.indexOf("danh gia") != -1 || lowerText.indexOf("thong tin") != -1 ||
-                        lowerText.indexOf("chi tiet") != -1 || lowerText.indexOf("cong dung") != -1 ||
-                        lowerText.indexOf("tac dung") != -1 || lowerText.indexOf("cach dung") != -1 ||
-                        lowerText.indexOf("natri") != -1 || lowerText.indexOf("cloric") != -1 ||
-                        lowerText.indexOf("clorid") != -1 || lowerText.indexOf("nuoc muoi") != -1 ||
-                        lowerText.indexOf("dinh nghia") != -1 || lowerText.indexOf("ke ve") != -1 ||
-                        lowerText.indexOf("thoi tiet") != -1 || lowerText.indexOf("nhiet do o") != -1 ||
-                        lowerText.indexOf("khi hau") != -1 || lowerText.indexOf("du bao") != -1 ||
-                        lowerText.indexOf("troi o") != -1);
-
-  // --- FAST-PATH LẬP TỨC CHO CÁC LỆNH ĐIỀU KHIỂN & CÂU HỎI THƯỜNG GẶP (PHẢN HỒI TỨC THÌ < 50ms) ---
-  if (lowerText == "bat den 1" || lowerText == "mo den 1") {
+  // --- FAST-PATH LẬP TỨC CHO CÁC LỆNH ĐIỀU KHIỂN & CÂU HỎI THƯỜNG GẶP (PHẢN HỒI TỨC THÌ < 20ms) ---
+  if (lowerText == "bat den 1" || lowerText == "mo den 1" || lowerText == "bat relay 1" || lowerText == "mo relay 1" || lowerText == "mo khoa cua" || lowerText == "mo khoa") {
     relay1 = true; digitalWrite(RELAY1_PIN, LOW);
-    if (!isSilent) playTTS("Đã bật đèn 1 cho bạn rồi nè!");
+    if (firebase_ready) Firebase.RTDB.setBoolAsync(&fbdo, FIREBASE_NODE "/relay1", true);
+    saveSettingsToEEPROM(relay1, relay2, ledBrightness);
+    uiUpdatePending = true;
+    if (!isSilent) playTTS("Đã bật relay 1 mở khóa cho bạn rồi nè!");
     return;
-  } else if (lowerText == "tat den 1") {
+  } else if (lowerText == "tat den 1" || lowerText == "tat relay 1" || lowerText == "dong khoa cua" || lowerText == "khoa cua" || lowerText == "dong relay 1") {
     relay1 = false; digitalWrite(RELAY1_PIN, HIGH);
-    if (!isSilent) playTTS("Đã tắt đèn 1 rồi nha!");
+    if (firebase_ready) Firebase.RTDB.setBoolAsync(&fbdo, FIREBASE_NODE "/relay1", false);
+    saveSettingsToEEPROM(relay1, relay2, ledBrightness);
+    uiUpdatePending = true;
+    if (!isSilent) playTTS("Đã tắt relay 1 đóng khóa rồi nha!");
     return;
-  } else if (lowerText == "bat den 2" || lowerText == "mo den 2") {
+  } else if (lowerText == "bat den 2" || lowerText == "mo den 2" || lowerText == "bat relay 2" || lowerText == "mo relay 2" || lowerText == "bat den" || lowerText == "mo den" || lowerText == "bat den phong") {
     relay2 = true; digitalWrite(RELAY2_PIN, LOW);
-    if (!isSilent) playTTS("Đã bật đèn 2 rồi nhé!");
+    if (firebase_ready) Firebase.RTDB.setBoolAsync(&fbdo, FIREBASE_NODE "/relay2", true);
+    saveSettingsToEEPROM(relay1, relay2, ledBrightness);
+    uiUpdatePending = true;
+    if (!isSilent) playTTS("Đã bật đèn cho bạn sáng sủa rồi nhé!");
     return;
-  } else if (lowerText == "tat den 2") {
+  } else if (lowerText == "tat den 2" || lowerText == "tat relay 2" || lowerText == "tat den" || lowerText == "tat den phong") {
     relay2 = false; digitalWrite(RELAY2_PIN, HIGH);
-    if (!isSilent) playTTS("Đã tắt đèn 2 rồi nha!");
+    if (firebase_ready) Firebase.RTDB.setBoolAsync(&fbdo, FIREBASE_NODE "/relay2", false);
+    saveSettingsToEEPROM(relay1, relay2, ledBrightness);
+    uiUpdatePending = true;
+    if (!isSilent) playTTS("Đã tắt đèn rồi nha bạn!");
     return;
-  } else if (lowerText.indexOf("may gio") != -1 || lowerText.indexOf("gio bao nhieu") != -1) {
+  } else if (lowerText == "bat tat ca" || lowerText == "bat het den" || lowerText == "mo tat ca" || lowerText == "bat het thiet bi") {
+    relay1 = true; relay2 = true;
+    digitalWrite(RELAY1_PIN, LOW); digitalWrite(RELAY2_PIN, LOW);
+    if (firebase_ready) {
+      Firebase.RTDB.setBoolAsync(&fbdo, FIREBASE_NODE "/relay1", true);
+      Firebase.RTDB.setBoolAsync(&fbdo, FIREBASE_NODE "/relay2", true);
+    }
+    saveSettingsToEEPROM(relay1, relay2, ledBrightness);
+    uiUpdatePending = true;
+    if (!isSilent) playTTS("Đã bật tất cả đèn và thiết bị trong phòng rồi nè!");
+    return;
+  } else if (lowerText == "tat tat ca" || lowerText == "tat het den" || lowerText == "tat tat ca thiet bi" || lowerText == "tat het thiet bi" || lowerText == "tat het") {
+    relay1 = false; relay2 = false;
+    digitalWrite(RELAY1_PIN, HIGH); digitalWrite(RELAY2_PIN, HIGH);
+    if (firebase_ready) {
+      Firebase.RTDB.setBoolAsync(&fbdo, FIREBASE_NODE "/relay1", false);
+      Firebase.RTDB.setBoolAsync(&fbdo, FIREBASE_NODE "/relay2", false);
+    }
+    saveSettingsToEEPROM(relay1, relay2, ledBrightness);
+    uiUpdatePending = true;
+    if (!isSilent) playTTS("Đã tắt toàn bộ thiết bị và đèn rồi nha bạn!");
+    return;
+  }
+
+  // --- FAST-PATH ÂM LƯỢNG & ĐÈN NỀN / LED VÒNG ---
+  if (lowerText.indexOf("tang am luong") != -1 || lowerText.indexOf("cho to len") != -1 || lowerText.indexOf("bat to len") != -1 || lowerText.indexOf("tang loa") != -1) {
+    audioVolume = min((uint8_t)21, (uint8_t)(audioVolume + 3));
+    audio.setVolume(audioVolume);
+    if (firebase_ready) Firebase.RTDB.setIntAsync(&fbdo, FIREBASE_NODE "/settings/audioVolume", audioVolume);
+    if (!isSilent) playTTS("Đã tăng âm lượng loa lên mức " + String(audioVolume) + " rồi nè!");
+    return;
+  } else if (lowerText.indexOf("giam am luong") != -1 || lowerText.indexOf("cho nho lai") != -1 || lowerText.indexOf("chinh nho loa") != -1 || lowerText.indexOf("giam loa") != -1) {
+    audioVolume = max((uint8_t)3, (uint8_t)(audioVolume - 3));
+    audio.setVolume(audioVolume);
+    if (firebase_ready) Firebase.RTDB.setIntAsync(&fbdo, FIREBASE_NODE "/settings/audioVolume", audioVolume);
+    if (!isSilent) playTTS("Đã giảm âm lượng loa xuống mức " + String(audioVolume) + " rồi nha!");
+    return;
+  } else if (lowerText.indexOf("den cau vong") != -1 || lowerText.indexOf("led cau vong") != -1 || lowerText.indexOf("doi mau den") != -1) {
+    setLedMode(15);
+    if (!isSilent) playTTS("Đã chuyển hiệu ứng đèn LED sang dải cầu vồng rực rỡ rồi nhé!");
+    return;
+  } else if (lowerText.indexOf("den nhip tho") != -1 || lowerText.indexOf("led nhip tho") != -1 || lowerText.indexOf("led breathing") != -1) {
+    setLedMode(3);
+    if (!isSilent) playTTS("Đã chuyển đèn sang chế độ nhịp thở êm dịu rồi nè!");
+    return;
+  } else if (lowerText.indexOf("tang do sang") != -1 || lowerText.indexOf("tang sang den") != -1) {
+    ledBrightness = min(255, ledBrightness + 40);
+    pixels.setBrightness(ledBrightness);
+    pixels.show();
+    saveSettingsToEEPROM(relay1, relay2, ledBrightness);
+    if (firebase_ready) Firebase.RTDB.setIntAsync(&fbdo, FIREBASE_NODE "/settings/ledBrightness", ledBrightness);
+    if (!isSilent) playTTS("Đã tăng độ sáng đèn vòng lên " + String((int)(ledBrightness * 100 / 255)) + " phần trăm rồi nha!");
+    return;
+  } else if (lowerText.indexOf("giam do sang") != -1 || lowerText.indexOf("giam sang den") != -1) {
+    ledBrightness = max(10, ledBrightness - 40);
+    pixels.setBrightness(ledBrightness);
+    pixels.show();
+    saveSettingsToEEPROM(relay1, relay2, ledBrightness);
+    if (firebase_ready) Firebase.RTDB.setIntAsync(&fbdo, FIREBASE_NODE "/settings/ledBrightness", ledBrightness);
+    if (!isSilent) playTTS("Đã giảm độ sáng đèn vòng xuống " + String((int)(ledBrightness * 100 / 255)) + " phần trăm rồi nhé!");
+    return;
+  } else if (lowerText.indexOf("do sang toi da") != -1 || lowerText.indexOf("den sang nhat") != -1) {
+    ledBrightness = 255;
+    pixels.setBrightness(255);
+    pixels.show();
+    saveSettingsToEEPROM(relay1, relay2, ledBrightness);
+    if (firebase_ready) Firebase.RTDB.setIntAsync(&fbdo, FIREBASE_NODE "/settings/ledBrightness", ledBrightness);
+    if (!isSilent) playTTS("Đã chỉnh đèn LED sáng tối đa 100 phần trăm rồi nha!");
+    return;
+  } else if (lowerText == "trang thai he thong" || lowerText == "kiem tra he thong" || lowerText == "bao cao he thong" || lowerText == "tinh trang nha" || lowerText == "trang thai nha") {
+    String rep = "Báo cáo hệ thống nhà thông minh: Nhiệt độ phòng là " + String(indoorTemp, 1) + " độ C, độ ẩm " + String(indoorHum, 0) + " phần trăm, áp suất " + String(indoorPres, 0) + " héc-tô-pas-can. Relay 1 đang " + (relay1 ? "bật" : "tắt") + ", Relay 2 đang " + (relay2 ? "bật" : "tắt") + ", Điều hòa đang " + (daikin_power ? ("bật " + String(daikin_temp) + " độ") : "tắt") + ", Quạt đang ở số " + String(current_fan_speed) + ", Âm lượng loa " + String(audioVolume) + " trên 21, Độ sáng đèn " + String((int)(ledBrightness * 100 / 255)) + " phần trăm. Mọi thứ đang hoạt động rất tốt nha bạn!";
+    if (!isSilent) playTTS(rep);
+    return;
+  }
+
+  // --- FAST-PATH GIỜ & LỊCH ÂM DƯƠNG ---
+  if (lowerText.indexOf("may gio") != -1 || lowerText.indexOf("gio bao nhieu") != -1) {
     if (!isSilent) playTTS("Bây giờ là " + hhmmText + " nha bạn!");
     return;
   } else if (lowerText.indexOf("am lich") != -1 || lowerText.indexOf("ngay am") != -1 || lowerText.indexOf("lich am") != -1) {
@@ -841,6 +989,16 @@ void sendToLLM(String userText, bool isSilent) {
     extern String canChiYear_global;
     String ans = "Hôm nay là ngày " + dateSolar + " dương lịch, tức ngày " + String(lunarDay_global) + " tháng " + String(lunarMonth_global) + " âm lịch năm " + canChiYear_global + " nha bạn!";
     if (!isSilent) playTTS(ans);
+    return;
+  }
+
+  // --- FAST-PATH HƯỚNG DẪN EDGE IMPULSE & HUẤN LUYỆN MODEL NHẬN DIỆN GIỌNG NÓI ---
+  if (lowerText.indexOf("edge impulse") != -1 || lowerText.indexOf("tu huan luyen model") != -1 ||
+      lowerText.indexOf("huan luyen model") != -1 || lowerText.indexOf("huan luyen tu khoa") != -1 ||
+      lowerText.indexOf("nhan dien giong noi bang arduino") != -1) {
+    String eiAns = "Nếu bạn muốn làm mọi thứ bằng Arduino IDE và tự huấn luyện từ khóa riêng tiếng Việt, Edge Impulse là lựa chọn hoàn hảo. Bạn dùng điện thoại hoặc máy tính để thu âm hàng loạt các mẫu giọng nói như Bật đèn hay Tắt quạt, tải lên hệ thống Edge Impulse để huấn luyện, sau đó hệ thống sẽ xuất ra một file thư viện C++ dựa trên TensorFlow Lite for Microcontrollers để bạn import thẳng vào Arduino IDE và nạp vào ESP32 chạy trực tiếp!";
+    Serial.println("🤖 Nori (Edge Impulse Fast-Path): " + eiAns);
+    if (!isSilent) playTTS(eiAns);
     return;
   }
 
@@ -876,72 +1034,30 @@ void sendToLLM(String userText, bool isSilent) {
     return;
   }
 
-  // Nếu là câu hỏi tìm kiếm trên mạng (và KHÔNG PHẢI hỏi cảm biến phòng cục bộ) thì gọi Cloud Search
-  if (!isSilent && !isDeviceCommand && isSearchQuery && !isRoomSensorQuery) {
-    Serial.println("🌐 Đang gọi Vercel Cloud Search & Analytics Engine...");
-    
-    // Đảm bảo giao diện LVGL vẽ mượt mặt suy nghĩ trước khi gọi HTTP
-    setAIFaceState(AI_STATE_THINKING);
-    extern String ai_prediction_short;
-    ai_prediction_short = "Dang suy nghi...";
-    extern volatile bool uiUpdatePending;
-    uiUpdatePending = true;
-    vTaskDelay(pdMS_TO_TICKS(50));
-
-    String cloudAns = "";
-    String cloudTtsUrl = "";
-    {
-      WiFiClientSecure searchClient;
-      searchClient.setInsecure();
-      searchClient.setTimeout(8000);
-      HTTPClient searchHttp;
-      String searchUrl = "https://vercel-backend-woad-seven.vercel.app/api/search?q=" + urlEncode(userText);
-      searchHttp.begin(searchClient, searchUrl);
-      int sCode = searchHttp.GET();
-      if (sCode == 200) {
-        String payload = searchHttp.getString();
-        JsonDocument searchDoc;
-        deserializeJson(searchDoc, payload);
-        if (searchDoc["success"] == true && searchDoc.containsKey("answer")) {
-          const char* cloudAnswer = searchDoc["answer"];
-          if (cloudAnswer && strlen(cloudAnswer) > 0) {
-            cloudAns = String(cloudAnswer);
-            cloudAns.trim();
-          }
-          if (searchDoc.containsKey("tts_url")) {
-            const char* directTts = searchDoc["tts_url"];
-            if (directTts && strlen(directTts) > 0) {
-              cloudTtsUrl = String(directTts);
-            }
-          }
-        }
-      }
-      searchHttp.end();
-      searchClient.stop();
-    }
-    delay(80); // Giải phóng hoàn toàn bộ nhớ TLS/SSL socket
-
-    if (cloudAns.length() > 0) {
-      Serial.println("🤖 Nori (Cloud Search & Analytics): " + cloudAns);
-      playTTS(cloudAns, false, cloudTtsUrl);
-      return;
-    }
-  }
-
   String answerToSpeak = "";
   String emotionToSet = "";
 
   {
     WiFiClientSecure client;
     client.setInsecure();
-    client.setTimeout(8000);
-    HTTPClient http;
-    http.setTimeout(8000);
-    
-    http.begin(client, "https://api.groq.com/openai/v1/chat/completions");
-    http.addHeader("Content-Type", "application/json");
-    http.addHeader("Authorization", "Bearer " + String(GROQ_API_KEY));
-    
+    client.setTimeout(12000);
+    client.setHandshakeTimeout(6);
+
+    Serial.println("🧠 Đang kết nối tới Groq LLM (api.groq.com:443)...");
+    bool connected = client.connect("api.groq.com", 443);
+    if (!connected) {
+      Serial.printf("⚠️ Thử kết nối lại tới Groq LLM (Free Heap: %u, Max Block: %u)...\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+      vTaskDelay(pdMS_TO_TICKS(350));
+      connected = client.connect("api.groq.com", 443);
+    }
+
+    if (!connected) {
+      Serial.println("❌ Không thể kết nối tới api.groq.com:443!");
+      if (!isSilent) setAIFaceState(AI_STATE_IDLE);
+      isAiBusy = false;
+      return;
+    }
+
     extern String userName;
     extern int ledBrightness;
     extern uint8_t audioVolume;
@@ -952,43 +1068,42 @@ void sendToLLM(String userText, bool isSilent) {
     extern String owmDesc;
 
     initAiMemory();
-    String systemPrompt = "Bạn là NORI - trợ lý AI thông minh, xinh xắn, cá tính và chu đáo của hệ thống nhà thông minh. "
+    String systemPrompt = "Bạn là NORI - Trợ lý AI và Chatbot Đa Năng Cao Cấp của hệ thống Nhà Thông Minh ESP32. "
                           "Hệ thống phần cứng vi điều khiển do chính tay ông chủ " + memUserName + " chế tạo ra. "
-                          "XƯNG HÔ: Tự xưng là 'tôi' hoặc 'Nori', gọi người dùng là '" + memUserName + "' hoặc 'ông chủ', 'bạn'. "
+                          "XƯNG HÔ: Tự xưng là 'em' hoặc 'Nori', gọi người dùng là '" + memUserName + "' hoặc 'ông chủ', 'bạn'. "
                           "Thời gian hiện tại: " + hhmmText + " ngày " + dateSolar + ". "
-                          "BỘ NHỚ LÂU DÀI ĐÃ GHI NHỚ VỀ NGƯỜI DÙNG: "
+                          "BỘ NHỚ LÂU DÀI: "
                           "- Tên người dùng: " + memUserName + " (Tên AI: " + memAiName + "). "
                           "- Sở thích & Thông tin đã nhớ: " + (memUserFacts.length() > 0 ? memUserFacts : "Chưa có") + ". "
                           "- Ghi chú / Dặn dò: " + (memCustomNotes.length() > 0 ? memCustomNotes : "Chưa có") + ". "
-                          "DỮ LIỆU CẢM BIẾN PHẦN CỨNG THỰC TẾ TRONG PHÒNG (AHT20 & BMP280): "
-                          "- Cảm biến nhiệt ẩm AHT20: Nhiệt độ trong phòng = " + String(indoorTemp, 1) + " độ C, Độ ẩm không khí trong phòng = " + String(indoorHum, 1) + "%. "
-                          "- Cảm biến khí áp BMP280: Áp suất không khí trong phòng = " + String(indoorPres, 1) + " hPa. "
-                          "- Trạm khí tượng OpenWeatherMap tại " + String(locationName) + ": Nhiệt độ ngoài trời = " + String(owmTemp, 1) + " độ C, Độ ẩm ngoài trời = " + String(owmHum, 1) + "%, Tốc độ gió = " + String(owmWind, 1) + " m/s, Tình trạng trời = " + owmDesc + ". "
-                          "- Trạng thái thiết bị: Relay 1 đang " + (relay1 ? "BẬT" : "TẮT") + ", Relay 2 đang " + (relay2 ? "BẬT" : "TẮT") + ", Quạt đang ở số: " + String(current_fan_speed) + ", Độ sáng LED: " + String(ledBrightness) + "/255, Âm lượng loa: " + String(audioVolume) + "/21. "
-                          "QUY TẮC TRẢ LỜI CỰC KỲ QUAN TRỌNG: "
-                          "1. ĐỐI VỚI CÂU HỎI VỀ CẢM BIẾN AHT20, BMP280, NHIỆT ĐỘ TRONG PHÒNG, ĐỘ ẨM, KHÔNG KHÍ PHÒNG: BẮT BUỘC đọc và báo cáo chính xác từng con số đo từ cảm biến AHT20 (Nhiệt độ " + String(indoorTemp, 1) + " độ C, Độ ẩm " + String(indoorHum, 1) + "%) và BMP280 (Áp suất " + String(indoorPres, 1) + " hPa). Nhận xét xem phòng đang mát mẻ, nóng bức hay bí bách và đưa ra lời khuyên thực tế. "
-                          "2. ĐỐI VỚI CÂU HỎI THỜI TIẾT NGOÀI TRỜI (" + String(locationName) + "): Dùng chính xác số liệu OpenWeatherMap ở trên để trả lời, phân biệt rõ ràng giữa nhiệt độ trong phòng và nhiệt độ ngoài trời. "
-                          "3. ĐỐI VỚI TẤT CẢ CÂU HỎI VỀ KIẾN THỨC, Y HỌC, DƯỢC PHẨM, HÓA HỌC (như Natri Cloric 0,9%, Nước muối sinh lý), KHOA HỌC, LỊCH SỬ, ĐỊA LÝ, NHÂN VẬT, KHÁI NIỆM, ĐỊNH NGHĨA, TIN TỨC: BẮT BUỘC trả lời ĐẦY ĐỦ, CỤ THỂ, CHI TIẾT VÀ CHUYÊN SÂU (3-5 câu gồm thành phần, bản chất, công dụng, ứng dụng thực tế và lưu ý quan trọng). TUYỆT ĐỐI KHÔNG trả lời ngắn ngủn 1 câu làm người dùng hụt hẫng. "
-                          "4. QUY TẮC GHI NHỚ THÔNG TIN: Nếu người dùng bảo bạn ghi nhớ điều gì (ví dụ: 'Hãy nhớ tôi thích nghe bài X', 'Tôi tên là Y', 'Tôi làm nghề Z', 'Nhớ mai nhắc tôi...'), hãy thêm hoặc cập nhật thông tin đó vào trường 'update_user_name' hoặc 'update_memory_fact' hoặc 'update_custom_note' trong JSON phản hồi. "
-                          "5. Tuyệt đối KHÔNG dùng ký tự đặc biệt (*, #, -, :), không dùng in đậm, in nghiêng, hay danh sách liệt kê. Chỉ dùng dấu câu cơ bản (, . ? !). "
-                          "6. TUYỆT ĐỐI KHÔNG dùng ký tự xuống dòng (Enter), viết toàn bộ văn bản trên cùng một dòng để loa đọc mượt mà không bị vấp ngắt đoạn. "
-                          "7. TUYỆT ĐỐI GIỮ NGUYÊN các thông số fan_speed, led_brightness, volume_level nếu người dùng không yêu cầu thay đổi. "
-                          "BẮT BUỘC phản hồi bằng JSON theo định dạng sau: "
+                          "DỮ LIỆU PHẦN CỨNG THỰC TẾ TRONG PHÒNG: "
+                          "- Cảm biến AHT20: Nhiệt độ trong phòng = " + String(indoorTemp, 1) + " độ C, Độ ẩm không khí = " + String(indoorHum, 1) + "%. "
+                          "- Cảm biến BMP280: Áp suất không khí = " + String(indoorPres, 1) + " hPa. "
+                          "- Ngoài trời (" + String(locationName) + "): Nhiệt độ = " + String(owmTemp, 1) + " độ C, Độ ẩm = " + String(owmHum, 1) + "%, Tốc độ gió = " + String(owmWind, 1) + " m/s, Tình trạng trời = " + owmDesc + ". "
+                          "- Trạng thái thiết bị: Relay 1 đang " + (relay1 ? "BẬT" : "TẮT") + ", Relay 2 đang " + (relay2 ? "BẬT" : "TẮT") + ", Điều hòa đang " + (daikin_power ? ("BẬT " + String(daikin_temp) + " độ") : "TẮT") + ", Quạt đang ở số: " + String(current_fan_speed) + ", Độ sáng LED 12 vòng: " + String(ledBrightness) + "/255, Âm lượng loa: " + String(audioVolume) + "/21. "
+                          "QUY TẮC PHẢN HỒI CỰC KỲ QUAN TRỌNG: "
+                          "1. BẠN LÀ CHATBOT ĐA NĂNG TOÀN DIỆN: Có kiến thức chuyên sâu về mọi lĩnh vực. Đặc biệt am hiểu công nghệ vi điều khiển, Edge Impulse (huấn luyện model nhận diện giọng nói/từ khóa tiếng Việt bằng Arduino IDE và xuất thư viện C++ TensorFlow Lite for Microcontrollers), ESP32-S3, AI, y học, sinh học, khoa học, văn hóa, xã hội. "
+                          "2. CÂU TRẢ LỜI CHUYÊN MÔN: Phải đầy đủ, chuẩn xác, mạch lạc (3-5 câu rõ ràng), giải thích cặn kẽ bản chất và ứng dụng. "
+                          "3. ĐỐI VỚI CÂU HỎI CẢM BIẾN TRONG PHÒNG: Báo cáo chính xác số liệu AHT20 và BMP280, đưa ra đánh giá môi trường sống thực tế. "
+                          "4. GHI NHỚ LÂU DÀI: Nếu người dùng bảo ghi nhớ điều gì, hãy lưu vào 'update_user_name', 'update_memory_fact' hoặc 'update_custom_note'. "
+                          "5. ĐỊNH DẠNG ÂM THANH: Toàn bộ văn bản 'answer' phải viết trên 1 đoạn duy nhất, không xuống dòng (Enter), không ký tự đặc biệt (*, #, -), chỉ dùng dấu câu (, . ? !). "
+                          "BẮT BUỘC phản hồi bằng JSON: "
                           "{\"answer\": \"câu trả lời\", \"action\": \"none\", \"ac_temp\": 26, \"fan_speed\": " + String(current_fan_speed) + ", \"led_brightness\": " + String(ledBrightness) + ", \"volume_level\": " + String(audioVolume) + ", \"emotion\": \"proud\", \"short_forecast\": \"" + (owmDesc.length() > 0 ? owmDesc : "Nang") + "\", \"weather_icon\": \"sun\", \"song_url\": \"\", \"song_name\": \"\", \"update_user_name\": \"\", \"update_memory_fact\": \"\", \"update_custom_note\": \"\"} "
-                          "Trường 'emotion' chọn 1 trong: neutral, happy, sad, surprised, confused, angry, excited, proud, curious, love, worried, tired, sleepy. "
-                          "Trường 'short_forecast' là dự báo cực ngắn gọn (TIẾNG VIỆT KHÔNG DẤU, vd: Mua, Nang...) tối đa 10 ký tự. "
-                          "Trường 'weather_icon' chọn 1 trong: sun, cloud, rain, storm. "
-                          "Trường 'action' chọn 1 trong: none, set_relay1_on, set_relay1_off, set_relay2_on, set_relay2_off, set_ac_on, set_ac_off, set_fan, play_music, search_music, stop_music. "
-                          "Nếu người dùng bảo phát/bật/mở/hát bất kỳ bài hát hoặc ca sĩ nào (ví dụ: 'bật bài Âm thầm bên em', 'mở nhạc Sơn Tùng', 'phát nhạc Đen Vâu', 'bật bài Lạc trôi', 'mở bài Cắt đôi nỗi sầu', 'hát nhạc bolero', 'bật nhạc'): BẮT BUỘC chọn action: 'search_music' và trả về 'song_name' là đúng tên bài hát hoặc ca sĩ người dùng yêu cầu. Trong trường 'answer' BẮT BUỘC nói: 'Dạ em đang tìm và phát bài [Tên bài hát] cho bạn đây nè!'. "
-                          "Nếu người dùng bảo dừng nhạc, tắt nhạc, thôi hát, ngắt nhạc, im đi: chọn action: 'stop_music'. "
-                          "Nếu người dùng điều khiển quạt, chọn action: set_fan và thay đổi 'fan_speed' từ 0 đến 3 (0: tắt, 1,2,3: mức gió). "
-                          "Nếu người dùng bảo chỉnh độ sáng đèn vòng (LED 12 vòng), đặt 'led_brightness' từ 0-255. "
-                          "Nếu người dùng bảo chỉnh âm lượng loa, đặt 'volume_level' từ 0-21. "
-                          "Nếu người dùng bảo bật điều hòa, chọn action: set_ac_on và điền số vào ac_temp (mặc định 26).";
+                          "Trường 'emotion' chọn: neutral, happy, sad, surprised, confused, angry, excited, proud, curious, love, worried, tired, sleepy. "
+                          "Trường 'action' chọn: none, set_relay1_on, set_relay1_off, set_relay2_on, set_relay2_off, set_all_relays_on, set_all_relays_off, set_ac_on, set_ac_off, set_fan, play_music, search_music, stop_music, goto_main_screen, goto_remote_screen. "
+                          "Nếu người dùng bảo trở về, quay về hoặc màn hình chính: chọn action: 'goto_main_screen'. "
+                          "Nếu người dùng bảo mở remote, điều khiển hoặc học lệnh: chọn action: 'goto_remote_screen'. "
+                          "Nếu người dùng yêu cầu phát/nghe nhạc: BẮT BUỘC chọn action: 'search_music' và trả về 'song_name' là tên bài hát/ca sĩ. "
+                          "Nếu người dùng bảo dừng/tắt nhạc: chọn action: 'stop_music'. "
+                          "Nếu điều khiển quạt: chọn action: 'set_fan' và 'fan_speed' từ 0-3. "
+                          "Nếu điều khiển đèn: chọn 'set_relay1_on'/'set_relay1_off' hoặc 'set_relay2_on'/'set_relay2_off' hoặc 'set_all_relays_on'/'set_all_relays_off'. "
+                          "Nếu chỉnh độ sáng LED vòng: cập nhật 'led_brightness' (0-255). "
+                          "Nếu chỉnh âm lượng loa: cập nhật 'volume_level' (0-21). "
+                          "Nếu bật điều hòa: chọn action: 'set_ac_on' kèm 'ac_temp' (16-30).";
 
     JsonDocument doc;
-    doc["model"] = "llama-3.1-8b-instant";
-    doc["max_tokens"] = 600; // Tăng dung lượng token để trả lời đầy đủ, chi tiết và chuyên sâu
+    doc["model"] = "groq/compound-mini";
+    doc["max_tokens"] = 600;
     doc["response_format"]["type"] = "json_object";
     
     JsonArray messages = doc["messages"].to<JsonArray>();
@@ -1009,12 +1124,39 @@ void sendToLLM(String userText, bool isSilent) {
     
     String requestBody;
     serializeJson(doc, requestBody);
-    
-    vTaskDelay(pdMS_TO_TICKS(30)); // Nhường CPU cho IDLE0 trước khi gửi request
-    int httpCode = http.POST(requestBody);
-    vTaskDelay(pdMS_TO_TICKS(30)); // Nhường CPU cho IDLE0 sau khi nhận response
-    if (httpCode == 200) {
-      String payload = http.getString();
+
+    client.println("POST /openai/v1/chat/completions HTTP/1.1");
+    client.println("Host: api.groq.com");
+    client.println("Authorization: Bearer " + String(GROQ_API_KEY));
+    client.println("Content-Type: application/json");
+    client.println("Connection: close");
+    client.print("Content-Length: ");
+    client.println(requestBody.length());
+    client.println();
+    client.print(requestBody);
+    client.flush();
+
+    String payload = "";
+    unsigned long startWait = millis();
+    while ((client.connected() || client.available()) && (millis() - startWait < 15000)) {
+      while (client.available()) {
+        payload += (char)client.read();
+        startWait = millis();
+      }
+      if (payload.indexOf("\"choices\"") != -1 && payload.indexOf("}]") != -1) {
+        int jStart = payload.indexOf('{');
+        int jEnd = payload.lastIndexOf('}');
+        if (jStart != -1 && jEnd != -1 && jEnd > jStart) {
+          payload = payload.substring(jStart, jEnd + 1);
+          break;
+        }
+      }
+      vTaskDelay(pdMS_TO_TICKS(15));
+    }
+    client.stop();
+
+    if (payload.length() > 0 && payload.indexOf("\"choices\"") != -1) {
+      vTaskDelay(pdMS_TO_TICKS(15)); // Nhường CPU cho IDLE0
       JsonDocument resDoc;
       deserializeJson(resDoc, payload);
       const char* ai_reply = resDoc["choices"][0]["message"]["content"];
@@ -1049,16 +1191,18 @@ void sendToLLM(String userText, bool isSilent) {
         pixels.setBrightness(ledBrightness);
         pixels.show(); // Áp dụng độ sáng mới ngay lập tức
         saveSettingsToEEPROM(relay1, relay2, ledBrightness);
-        if (firebase_ready) Firebase.RTDB.setIntAsync(&fbdo, "/ESP32_AI_Hub/settings/ledBrightness", ledBrightness);
+        if (firebase_ready) Firebase.RTDB.setIntAsync(&fbdo, FIREBASE_NODE "/settings/ledBrightness", ledBrightness);
       }
       
       if (vol_l >= 0 && vol_l <= 21) {
         extern uint8_t audioVolume;
         audioVolume = vol_l;
         audio.setVolume(audioVolume);
-        if (firebase_ready) Firebase.RTDB.setIntAsync(&fbdo, "/ESP32_AI_Hub/settings/audioVolume", audioVolume);
+        if (firebase_ready) Firebase.RTDB.setIntAsync(&fbdo, FIREBASE_NODE "/settings/audioVolume", audioVolume);
       }
       
+      vTaskDelay(pdMS_TO_TICKS(15)); // Nhường CPU cho IDLE0 sau khi cập nhật thiết bị
+
       // Cập nhật bộ nhớ lâu dài nếu AI trích xuất được thông tin
       if (actionDoc.containsKey("update_user_name")) {
         const char* uName = actionDoc["update_user_name"];
@@ -1073,6 +1217,8 @@ void sendToLLM(String userText, bool isSilent) {
         if (uNote && strlen(uNote) > 0) saveAiMemory("customNotes", String(uNote));
       }
       
+      vTaskDelay(pdMS_TO_TICKS(15)); // Nhường CPU cho IDLE0 sau khi ghi Flash NVS
+
       // Xử lý action
       if (ai_reply && !isSilent) {
         addChatHistory("assistant", String(ai_reply)); // Lưu lại câu trả lời vào trí nhớ
@@ -1082,8 +1228,8 @@ void sendToLLM(String userText, bool isSilent) {
         answerToSpeak = String(answer);
         Serial.println("🤖 Nori: " + answerToSpeak);
         if (firebase_ready) {
-          Firebase.RTDB.setStringAsync(&fbdo, "/ESP32_AI_Hub/ai/last_question", userText);
-          Firebase.RTDB.setStringAsync(&fbdo, "/ESP32_AI_Hub/ai/last_answer", answerToSpeak);
+          Firebase.RTDB.setStringAsync(&fbdo, FIREBASE_NODE "/ai/last_question", userText);
+          Firebase.RTDB.setStringAsync(&fbdo, FIREBASE_NODE "/ai/last_answer", answerToSpeak);
         }
       }
 
@@ -1093,10 +1239,44 @@ void sendToLLM(String userText, bool isSilent) {
       
       if (action) {
         String actStr = String(action);
-        if (actStr == "set_relay1_on") { relay1 = true; digitalWrite(RELAY1_PIN, LOW); }
-        else if (actStr == "set_relay1_off") { relay1 = false; digitalWrite(RELAY1_PIN, HIGH); }
-        else if (actStr == "set_relay2_on") { relay2 = true; digitalWrite(RELAY2_PIN, LOW); }
-        else if (actStr == "set_relay2_off") { relay2 = false; digitalWrite(RELAY2_PIN, HIGH); }
+        if (actStr == "set_relay1_on") {
+          relay1 = true; digitalWrite(RELAY1_PIN, LOW);
+          if (firebase_ready) Firebase.RTDB.setBoolAsync(&fbdo, FIREBASE_NODE "/relay1", true);
+          saveSettingsToEEPROM(relay1, relay2, ledBrightness);
+        }
+        else if (actStr == "set_relay1_off") {
+          relay1 = false; digitalWrite(RELAY1_PIN, HIGH);
+          if (firebase_ready) Firebase.RTDB.setBoolAsync(&fbdo, FIREBASE_NODE "/relay1", false);
+          saveSettingsToEEPROM(relay1, relay2, ledBrightness);
+        }
+        else if (actStr == "set_relay2_on") {
+          relay2 = true; digitalWrite(RELAY2_PIN, LOW);
+          if (firebase_ready) Firebase.RTDB.setBoolAsync(&fbdo, FIREBASE_NODE "/relay2", true);
+          saveSettingsToEEPROM(relay1, relay2, ledBrightness);
+        }
+        else if (actStr == "set_relay2_off") {
+          relay2 = false; digitalWrite(RELAY2_PIN, HIGH);
+          if (firebase_ready) Firebase.RTDB.setBoolAsync(&fbdo, FIREBASE_NODE "/relay2", false);
+          saveSettingsToEEPROM(relay1, relay2, ledBrightness);
+        }
+        else if (actStr == "set_all_relays_on") {
+          relay1 = true; relay2 = true;
+          digitalWrite(RELAY1_PIN, LOW); digitalWrite(RELAY2_PIN, LOW);
+          if (firebase_ready) {
+            Firebase.RTDB.setBoolAsync(&fbdo, FIREBASE_NODE "/relay1", true);
+            Firebase.RTDB.setBoolAsync(&fbdo, FIREBASE_NODE "/relay2", true);
+          }
+          saveSettingsToEEPROM(relay1, relay2, ledBrightness);
+        }
+        else if (actStr == "set_all_relays_off") {
+          relay1 = false; relay2 = false;
+          digitalWrite(RELAY1_PIN, HIGH); digitalWrite(RELAY2_PIN, HIGH);
+          if (firebase_ready) {
+            Firebase.RTDB.setBoolAsync(&fbdo, FIREBASE_NODE "/relay1", false);
+            Firebase.RTDB.setBoolAsync(&fbdo, FIREBASE_NODE "/relay2", false);
+          }
+          saveSettingsToEEPROM(relay1, relay2, ledBrightness);
+        }
         else if (actStr == "set_ac_on") {
           uint8_t targetTemp = (ac_temp >= 16 && ac_temp <= 30) ? ac_temp : 25;
           sendDaikinCommand(true, targetTemp, 10);
@@ -1116,6 +1296,8 @@ void sendToLLM(String userText, bool isSilent) {
           if (s_name && strlen(s_name) > 0) {
             pendingSongTitle = String(s_name);
             Serial.println("🔎 Đã lên lịch tìm bài hát theo tên: " + pendingSongTitle);
+          } else {
+            pendingSongTitle = "Lạc Trôi";
           }
         }
         else if (actStr == "stop_music") {
@@ -1131,6 +1313,27 @@ void sendToLLM(String userText, bool isSilent) {
           hasPendingAudioStop = true;
           setAIFaceState(AI_STATE_IDLE);
           Serial.println("🛑 AI đã dừng phát nhạc an toàn theo yêu cầu!");
+        }
+        else if (actStr == "goto_main_screen") {
+          if (audio.isRunning()) audio.stopSong();
+          isMusicMode = false;
+          if (is_ir_learning_mode) {
+            is_ir_learning_mode = false;
+            irrecv.disableIRIn();
+          }
+          stopMusicScreen();
+          showMainScreen();
+          setAIFaceState(AI_STATE_IDLE);
+          setLedMode(0);
+          Serial.println("📱 AI đã chuyển về màn hình chính Dashboard!");
+        }
+        else if (actStr == "goto_remote_screen") {
+          if (audio.isRunning()) audio.stopSong();
+          is_ir_learning_mode = true;
+          irrecv.enableIRIn();
+          showIrScreen();
+          updateIrScreen(selected_ir_idx, typeToString(learned_ir[selected_ir_idx].type), String((uint32_t)(learned_ir[selected_ir_idx].value & 0xFFFFFFFF), HEX));
+          Serial.println("📱 AI đã chuyển sang màn hình Remote Học Lệnh!");
         }
         else if (actStr == "set_fan") {
           extern LearnedIR learned_ir[];
@@ -1192,14 +1395,12 @@ void sendToLLM(String userText, bool isSilent) {
         uiUpdatePending = true;
       }
     } else {
-      Serial.printf("❌ Lỗi gọi LLM: %d\n", httpCode);
-      String errorMsg = http.getString();
-      Serial.println("Chi tiết lỗi: " + errorMsg);
+      Serial.println("❌ Lỗi nhận phản hồi từ Groq LLM!");
+      if (payload.length() > 0) {
+        Serial.println("Chi tiết: " + payload);
+      }
       if (!isSilent) setAIFaceState(AI_STATE_IDLE);
     }
-    
-    http.end();
-    client.stop();
   }
   // Giải phóng hoàn toàn bộ nhớ TLS/SSL socket trước khi gọi Audio TTS
   delay(80);
@@ -1275,11 +1476,11 @@ void setupAiTask() {
     aiWorkQueue = xQueueCreate(4, sizeof(AiWorkItem));
   }
   if (aiWorkerTaskHandle == NULL) {
-    // Tạo Task chạy riêng biệt trên Core 0, Priority 1, Stack 24576 bytes trong SRAM
+    // Tạo Task chạy riêng biệt trên Core 0, Priority 1, Stack 12288 bytes trong SRAM
     BaseType_t res = xTaskCreatePinnedToCore(
       aiWorkerTask,
       "aiWorkerTask",
-      24576,
+      12288,
       NULL,
       1,
       &aiWorkerTaskHandle,

@@ -7,14 +7,18 @@
 
 #define AT24C32_ADDR 0x57
 
-// Hàm tự viết giao tiếp I2C cho AT24C32 (Không cần cài thư viện)
-inline void eepromWriteByte(uint16_t mem_addr, uint8_t data) {
+// Ghi khối dữ liệu theo trang Page Write (Tốc độ cao, chỉ delay 5ms một lần duy nhất)
+inline void eepromWriteBuffer(uint16_t mem_addr, const uint8_t* data, size_t len) {
     Wire.beginTransmission(AT24C32_ADDR);
     Wire.write((uint8_t)(mem_addr >> 8));   // MSB
     Wire.write((uint8_t)(mem_addr & 0xFF)); // LSB
-    Wire.write(data);
+    Wire.write(data, len);
     Wire.endTransmission();
-    delay(5); // AT24C32 cần khoảng 5ms để ghi xong 1 byte
+    delay(5); // AT24C32 cần 5ms cho 1 chu kỳ ghi Page Write
+}
+
+inline void eepromWriteByte(uint16_t mem_addr, uint8_t data) {
+    eepromWriteBuffer(mem_addr, &data, 1);
 }
 
 inline uint8_t eepromReadByte(uint16_t mem_addr) {
@@ -46,14 +50,11 @@ struct LearnedIR {
 
 extern LearnedIR learned_ir[MAX_IR_SLOTS];
 
-// Ghi 1 Struct vào EEPROM (byte-by-byte)
+// Ghi 1 Struct vào EEPROM siêu tốc bằng Page Write
 template <class T> int eepromWriteStruct(int ee, const T& value) {
     const uint8_t* p = (const uint8_t*)(const void*)&value;
-    unsigned int i;
-    for (i = 0; i < sizeof(value); i++) {
-        eepromWriteByte(ee++, *p++);
-    }
-    return i;
+    eepromWriteBuffer(ee, p, sizeof(value));
+    return sizeof(value);
 }
 
 // Đọc 1 Struct từ EEPROM

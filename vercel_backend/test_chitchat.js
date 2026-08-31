@@ -1,6 +1,6 @@
 const axios = require('axios');
 
-const GROQ_API_KEY = "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";
+const GROQ_API_KEY = process.env.GROQ_API_KEY || "YOUR_GROQ_API_KEY";
 
 async function testChitChat(q) {
   const prompt = `Bạn là trợ lý AI thông minh NORI của ngôi nhà thông minh.

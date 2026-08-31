@@ -98,7 +98,50 @@ inline void renderDualSubpixelComet(float headPos, float tailLength, uint8_t r, 
   pixels.show();
 }
 
-// Hàm điều khiển hoạt ảnh 12 LED - Lướt nhẹ nhàng, mượt mà, tốc độ vừa phải (~2.5s / vòng)
+// Render Lưỡng Cực Xoáy (Dipole Vortex Swirl) - 2 cực đối xứng 180° xoáy lướt nhẹ nhàng, hòa sắc đa tầng siêu mượt
+inline void renderDipoleVortexSwirl(float headPos, float tailLength, uint8_t r1, uint8_t g1, uint8_t b1, uint8_t r2, uint8_t g2, uint8_t b2, float minGlow = 0.02f) {
+  pixels.clear();
+  float rAcc[NUM_LEDS] = {0.0f};
+  float gAcc[NUM_LEDS] = {0.0f};
+  float bAcc[NUM_LEDS] = {0.0f};
+
+  for (int p = 0; p < 2; p++) {
+    float head = headPos + (float)p * ((float)NUM_LEDS / 2.0f); // 2 cực đối xứng đúng 180 độ (cách nhau 6 LED)
+    while (head >= (float)NUM_LEDS) head -= (float)NUM_LEDS;
+    while (head < 0.0f) head += (float)NUM_LEDS;
+
+    uint8_t pr = (p == 0) ? r1 : r2;
+    uint8_t pg = (p == 0) ? g1 : g2;
+    uint8_t pb = (p == 0) ? b1 : b2;
+
+    for (int i = 0; i < NUM_LEDS; i++) {
+      float dist = getCircularDist(head, (float)i, (float)NUM_LEDS);
+      if (dist <= tailLength) {
+        float norm = 1.0f - (dist / tailLength);
+        float brightness = norm * norm * (3.0f - 2.0f * norm); // Cubic Smoothstep
+        brightness = brightness * (1.0f - minGlow) + minGlow;
+
+        rAcc[i] += (float)pr * brightness;
+        gAcc[i] += (float)pg * brightness;
+        bAcc[i] += (float)pb * brightness;
+      } else if (minGlow > 0.0f) {
+        rAcc[i] += (float)pr * minGlow;
+        gAcc[i] += (float)pg * minGlow;
+        bAcc[i] += (float)pb * minGlow;
+      }
+    }
+  }
+
+  for (int i = 0; i < NUM_LEDS; i++) {
+    uint8_t cr = (uint8_t)min(255.0f, rAcc[i]);
+    uint8_t cg = (uint8_t)min(255.0f, gAcc[i]);
+    uint8_t cb = (uint8_t)min(255.0f, bAcc[i]);
+    pixels.setPixelColor(i, pixels.Color(cr, cg, cb));
+  }
+  pixels.show();
+}
+
+// Hàm điều khiển hoạt ảnh 12 LED - Lướt nhẹ nhàng, mượt mà, chuyển động liên tục theo thời gian thực (Time-Delta)
 inline void handleLedAnimation() {
   static unsigned long lastLedUpdate = 0;
   static float subPos = 0.0f;
@@ -107,38 +150,53 @@ inline void handleLedAnimation() {
   static bool sweepDir = true;
   
   unsigned long now = millis();
-  // Cập nhật ở tốc độ 50 FPS (20ms/khung hình) giúp chuyển động mượt như lụa
-  if (now - lastLedUpdate < 20) return;
+  if (lastLedUpdate == 0) lastLedUpdate = now;
+  unsigned long elapsed = now - lastLedUpdate;
+  if (elapsed < 16) return; // Khóa trần ~60 FPS giúp tiết kiệm CPU và mượt mà
   lastLedUpdate = now;
   
-  // --- 0. IDLE MODE: Vệt sáng xanh ngọc êm đềm lướt nhẹ (~2.5 giây/vòng) ---
+  float dt = (float)elapsed / 1000.0f; // Thời gian trôi qua thực tế (giây)
+  float fFact = dt * 50.0f; // Hệ số chuẩn hóa theo thang 50 FPS
+  if (fFact > 2.5f) fFact = 2.5f; // Chống giật vọt bước khi có ngắt hệ thống
+  if (fFact < 0.1f) fFact = 0.1f;
+  
+  // --- 0. IDLE MODE: LƯỠNG CỰC XOÁY (DIPOLE VORTEX SWIRL) - 2 CỰC CYAN & VIOLET XOÁY ĐỐI XỨNG SIÊU MƯỢT ---
   if (currentLedMode == 0) {
-    float speed = 0.09f; // Tốc độ vừa phải, lướt mượt mà trên 12 LED
-    if (indoorTemp > 35.0f) speed = 0.12f;
+    float speed = 0.075f; // Tốc độ xoáy thư thái, nhẹ nhàng (~3.2s / vòng)
     
-    subPos += speed;
-    if (subPos >= (float)NUM_LEDS) subPos -= (float)NUM_LEDS;
+    subPos += speed * fFact;
+    while (subPos >= (float)NUM_LEDS) subPos -= (float)NUM_LEDS;
+    while (subPos < 0.0f) subPos += (float)NUM_LEDS;
     
-    uint8_t r = 0, g = 230, b = 180; // Xanh ngọc Cyber dịu mát
+    // Cực 1 & Cực 2 đổi sắc theo nhiệt độ phòng thực tế
+    uint8_t r1 = 0, g1 = 235, b1 = 255;   // Cực 1: Cyber Aqua / Cyan Neon
+    uint8_t r2 = 175, g2 = 50, b2 = 255;  // Cực 2: Neon Amethyst / Violet
+    
     if (indoorTemp >= 30.0f && indoorTemp <= 35.0f) {
-      r = 245; g = 150; b = 15; // Vàng hổ phách ấm áp
+      r1 = 255; g1 = 170; b1 = 20;  // Vàng Hổ Phách
+      r2 = 255; g2 = 70;  b2 = 130; // Hồng San Hô
     } else if (indoorTemp > 35.0f) {
-      r = 245; g = 50; b = 90; // Hồng đỏ rực
+      r1 = 255; g1 = 40;  b1 = 60;  // Đỏ Lửa
+      r2 = 255; g2 = 140; b2 = 0;   // Cam Hoàng Kim
+    } else if (indoorTemp < 22.0f && indoorTemp > 0.0f) {
+      r1 = 0;   g1 = 190; b1 = 255; // Băng Tuyết
+      r2 = 80;  g2 = 100; b2 = 255; // Xanh Đêm Sâu
     }
     
-    renderSubpixelComet(subPos, 4.5f, r, g, b, 0.03f);
+    renderDipoleVortexSwirl(subPos, 4.8f, r1, g1, b1, r2, g2, b2, 0.02f);
   }
   
-  // --- 1. THINKING MODE: 2 vệt tím Lavender xoay đối xứng đuổi nhau lướt nhẹ ---
+  // --- 1. THINKING MODE: Lưỡng cực xoáy tím & trắng ánh bạc xoay tập trung ---
   else if (currentLedMode == 1) {
-    subPos += 0.11f; // Xoay thư thái, lịch thiệp
-    if (subPos >= (float)NUM_LEDS) subPos -= (float)NUM_LEDS;
-    renderDualSubpixelComet(subPos, 3.8f, 170, 70, 255);
+    subPos += 0.10f * fFact;
+    while (subPos >= (float)NUM_LEDS) subPos -= (float)NUM_LEDS;
+    while (subPos < 0.0f) subPos += (float)NUM_LEDS;
+    renderDipoleVortexSwirl(subPos, 4.2f, 190, 70, 255, 230, 240, 255, 0.03f);
   }
   
   // --- 2. ERROR MODE: Nhịp thở đỏ êm (Không chớp nháy gắt) ---
   else if (currentLedMode == 2) {
-    breathPhase += 0.08f;
+    breathPhase += 0.08f * fFact;
     float bVal = (sin(breathPhase) + 1.0f) * 0.5f; // 0.0 -> 1.0
     uint8_t r = (uint8_t)(255 * bVal);
     pixels.fill(pixels.Color(r, 0, 0));
@@ -147,9 +205,10 @@ inline void handleLedAnimation() {
   
   // --- 3. LISTENING MODE: Sóng thở Cyan kết hợp xoay êm ---
   else if (currentLedMode == 3) {
-    subPos += 0.08f;
-    if (subPos >= (float)NUM_LEDS) subPos -= (float)NUM_LEDS;
-    breathPhase += 0.07f;
+    subPos += 0.08f * fFact;
+    while (subPos >= (float)NUM_LEDS) subPos -= (float)NUM_LEDS;
+    while (subPos < 0.0f) subPos += (float)NUM_LEDS;
+    breathPhase += 0.07f * fFact;
     float bVal = 0.4f + 0.6f * (sin(breathPhase) + 1.0f) * 0.5f;
     
     pixels.clear();
@@ -164,7 +223,7 @@ inline void handleLedAnimation() {
   
   // --- 4. SUCCESS MODE: Vòng xanh ngọc bung nở rồi về Idle ---
   else if (currentLedMode == 4) {
-    breathPhase += 0.09f;
+    breathPhase += 0.09f * fFact;
     float bVal = (sin(breathPhase) + 1.0f) * 0.5f;
     uint8_t g = (uint8_t)(255 * bVal);
     pixels.fill(pixels.Color(0, g, (uint8_t)(g * 0.6f)));
@@ -180,23 +239,27 @@ inline void handleLedAnimation() {
   
   // --- CÁC TRẠNG THÁI CẢM XÚC (10 - 22) CHUYỂN ĐỘNG MƯỢT NHẸ TRÊN 12 LED ---
   else if (currentLedMode == 10) { // happy: Vệt vàng chanh rạng rỡ xoay êm
-    subPos += 0.10f;
-    if (subPos >= (float)NUM_LEDS) subPos -= (float)NUM_LEDS;
+    subPos += 0.10f * fFact;
+    while (subPos >= (float)NUM_LEDS) subPos -= (float)NUM_LEDS;
+    while (subPos < 0.0f) subPos += (float)NUM_LEDS;
     renderSubpixelComet(subPos, 5.0f, 210, 240, 10, 0.03f);
   }
   else if (currentLedMode == 11) { // sad: Xanh biển sâu trôi chậm rãi
-    subPos += 0.06f;
-    if (subPos >= (float)NUM_LEDS) subPos -= (float)NUM_LEDS;
+    subPos += 0.06f * fFact;
+    while (subPos >= (float)NUM_LEDS) subPos -= (float)NUM_LEDS;
+    while (subPos < 0.0f) subPos += (float)NUM_LEDS;
     renderSubpixelComet(subPos, 4.5f, 10, 80, 230, 0.02f);
   }
   else if (currentLedMode == 12) { // surprised: Vệt ánh bạc ngọc trai xoay đôi
-    subPos += 0.12f;
-    if (subPos >= (float)NUM_LEDS) subPos -= (float)NUM_LEDS;
+    subPos += 0.12f * fFact;
+    while (subPos >= (float)NUM_LEDS) subPos -= (float)NUM_LEDS;
+    while (subPos < 0.0f) subPos += (float)NUM_LEDS;
     renderDualSubpixelComet(subPos, 3.5f, 240, 245, 255);
   }
   else if (currentLedMode == 13) { // confused: Vệt Tím & Cam xen kẽ lướt nhẹ
-    subPos += 0.09f;
-    if (subPos >= (float)NUM_LEDS) subPos -= (float)NUM_LEDS;
+    subPos += 0.09f * fFact;
+    while (subPos >= (float)NUM_LEDS) subPos -= (float)NUM_LEDS;
+    while (subPos < 0.0f) subPos += (float)NUM_LEDS;
     pixels.clear();
     for (int i = 0; i < NUM_LEDS; i++) {
       float dist = getCircularDist(subPos, (float)i, (float)NUM_LEDS);
@@ -209,13 +272,15 @@ inline void handleLedAnimation() {
     pixels.show();
   }
   else if (currentLedMode == 14) { // angry: Vệt đỏ lửa lướt đều
-    subPos += 0.11f;
-    if (subPos >= (float)NUM_LEDS) subPos -= (float)NUM_LEDS;
+    subPos += 0.11f * fFact;
+    while (subPos >= (float)NUM_LEDS) subPos -= (float)NUM_LEDS;
+    while (subPos < 0.0f) subPos += (float)NUM_LEDS;
     renderSubpixelComet(subPos, 5.0f, 255, 30, 30, 0.05f);
   }
   else if (currentLedMode == 15) { // excited: Cầu vồng Cyber chuyển sắc liên tục siêu êm
-    subPos += 0.08f;
-    if (subPos >= (float)NUM_LEDS) subPos -= (float)NUM_LEDS;
+    subPos += 0.08f * fFact;
+    while (subPos >= (float)NUM_LEDS) subPos -= (float)NUM_LEDS;
+    while (subPos < 0.0f) subPos += (float)NUM_LEDS;
     for (int i = 0; i < NUM_LEDS; i++) {
       float hueNorm = fmod((float)i / (float)NUM_LEDS + subPos / (float)NUM_LEDS, 1.0f);
       uint32_t color = pixels.ColorHSV((uint16_t)(hueNorm * 65535.0f), 220, 240);
@@ -224,38 +289,43 @@ inline void handleLedAnimation() {
     pixels.show();
   }
   else if (currentLedMode == 16) { // proud: Vệt vàng ánh kim hoàng gia
-    subPos += 0.09f;
-    if (subPos >= (float)NUM_LEDS) subPos -= (float)NUM_LEDS;
+    subPos += 0.09f * fFact;
+    while (subPos >= (float)NUM_LEDS) subPos -= (float)NUM_LEDS;
+    while (subPos < 0.0f) subPos += (float)NUM_LEDS;
     renderSubpixelComet(subPos, 5.2f, 255, 180, 20, 0.04f);
   }
   else if (currentLedMode == 17) { // curious: Vệt xanh ngọc quét qua lại như con lắc
     if (sweepDir) {
-      subPos += 0.09f;
+      subPos += 0.09f * fFact;
       if (subPos >= (float)NUM_LEDS - 1.0f) sweepDir = false;
     } else {
-      subPos -= 0.09f;
+      subPos -= 0.09f * fFact;
       if (subPos <= 0.0f) sweepDir = true;
     }
     renderSubpixelComet(subPos, 4.0f, 0, 240, 160, 0.02f);
   }
   else if (currentLedMode == 18) { // love: Vệt hồng Neon xoay đôi ấm áp
-    subPos += 0.09f;
-    if (subPos >= (float)NUM_LEDS) subPos -= (float)NUM_LEDS;
+    subPos += 0.09f * fFact;
+    while (subPos >= (float)NUM_LEDS) subPos -= (float)NUM_LEDS;
+    while (subPos < 0.0f) subPos += (float)NUM_LEDS;
     renderDualSubpixelComet(subPos, 3.8f, 255, 40, 140);
   }
   else if (currentLedMode == 19) { // worried: Sóng xanh lam nhạt gợn nhẹ
-    subPos += 0.07f;
-    if (subPos >= (float)NUM_LEDS) subPos -= (float)NUM_LEDS;
+    subPos += 0.07f * fFact;
+    while (subPos >= (float)NUM_LEDS) subPos -= (float)NUM_LEDS;
+    while (subPos < 0.0f) subPos += (float)NUM_LEDS;
     renderSubpixelComet(subPos, 4.5f, 60, 160, 255, 0.03f);
   }
   else if (currentLedMode == 20) { // tired: Vệt xám tro thư giãn
-    subPos += 0.06f;
-    if (subPos >= (float)NUM_LEDS) subPos -= (float)NUM_LEDS;
+    subPos += 0.06f * fFact;
+    while (subPos >= (float)NUM_LEDS) subPos -= (float)NUM_LEDS;
+    while (subPos < 0.0f) subPos += (float)NUM_LEDS;
     renderSubpixelComet(subPos, 3.8f, 90, 100, 110, 0.02f);
   }
   else if (currentLedMode == 21) { // sleepy: 2 vệt xanh đêm dịu êm
-    subPos += 0.05f;
-    if (subPos >= (float)NUM_LEDS) subPos -= (float)NUM_LEDS;
+    subPos += 0.05f * fFact;
+    while (subPos >= (float)NUM_LEDS) subPos -= (float)NUM_LEDS;
+    while (subPos < 0.0f) subPos += (float)NUM_LEDS;
     renderDualSubpixelComet(subPos, 3.5f, 10, 40, 130);
   }
   else if (currentLedMode == 22) {

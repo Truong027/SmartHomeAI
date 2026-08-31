@@ -278,7 +278,10 @@ void handleTouch() { // Xử lý nút cứng với thuật toán chống rung ch
               isMusicMode = false;
               wasAudioRunning = false;
               isAiBusy = false;
-              is_ir_learning_mode = false;
+              if (is_ir_learning_mode) {
+                is_ir_learning_mode = false;
+                irrecv.disableIRIn(); // Tắt ngắt thu hồng ngoại khi thoát
+              }
 
               // Dừng màn hình nhạc nếu có
               stopMusicScreen();
@@ -330,12 +333,14 @@ void handleTouch() { // Xử lý nút cứng với thuật toán chống rung ch
       if (is_ir_learning_mode) {
         if (audio.isRunning()) audio.stopSong();
         if (isRecording) cancelRecording();
+        irrecv.enableIRIn(); // Chỉ bật ngắt phần cứng khi thực sự vào chế độ học lệnh
         showIrScreen();
         updateIrScreen(selected_ir_idx, typeToString(learned_ir[selected_ir_idx].type), String((uint32_t)(learned_ir[selected_ir_idx].value & 0xFFFFFFFF), HEX));
-        Serial.println("🟢 BẬT Chế độ học lệnh IR.");
+        Serial.println("🟢 BẬT Chế độ học lệnh IR (Đã kích hoạt ngắt thu IR).");
       } else {
+        irrecv.disableIRIn(); // Tắt ngắt phần cứng để giải phóng 100% CPU cho LED & Màn hình
         showMainScreen();
-        Serial.println("🔴 TẮT Chế độ học lệnh IR -> Về màn hình chính.");
+        Serial.println("🔴 TẮT Chế độ học lệnh IR (Đã tắt ngắt thu IR) -> Về màn hình chính.");
       }
       uiUpdatePending = true;
       press_start3 = 0; // Đánh dấu đã xử lý
@@ -414,7 +419,7 @@ String removeVietnameseAccents(String text) {
   return text;
 }
 
-void fetchWeather() {
+void fetchWeatherInternal() {
   if (WiFi.status() == WL_CONNECTED) {
     HTTPClient http;
     // URL được thiết lập từ config.h, thêm lang=vi để lấy tiếng Việt
@@ -422,7 +427,7 @@ void fetchWeather() {
                  "&lon=" + String(weatherLon, 6) + 
                  "&units=metric&lang=vi&appid=" + String(weatherApiKey);
                  
-    Serial.println("🌐 Đang tải thời tiết từ OpenWeatherMap...");
+    Serial.println("🌐 Đang tải thời tiết từ OpenWeatherMap (Background Core 0)...");
     http.begin(url);
     int httpCode = http.GET();
     
@@ -446,6 +451,20 @@ void fetchWeather() {
     }
     http.end();
   }
+}
+
+void weatherTask(void *pvParameters) {
+  fetchWeatherInternal();
+  vTaskDelete(NULL);
+}
+
+void fetchWeather() {
+  static TaskHandle_t wTaskHandle = NULL;
+  if (wTaskHandle != NULL) {
+    eTaskState state = eTaskGetState(wTaskHandle);
+    if (state != eDeleted && state != eInvalid) return;
+  }
+  xTaskCreatePinnedToCore(weatherTask, "weatherTask", 16384, NULL, 1, &wTaskHandle, 0);
 }
 
 // ---------------- FIREBASE FUNCTIONS ----------------
@@ -546,7 +565,29 @@ void setupFirebase() {
 }
 // ---------------------------------------------------
 
+// Tác vụ điều khiển LED Ring 12 bóng độc lập trên Core 0 (Đạt 55 FPS mượt mà không bị gián đoạn)
+void ledTask(void *pvParameters) {
+  while (true) {
+    handleLedAnimation();
+    vTaskDelay(pdMS_TO_TICKS(18));
+  }
+}
+
+#include <esp_task_wdt.h>
+
 void setup() {
+  // Cấu hình Task Watchdog 30s an toàn, không theo dõi Idle Task để các tác vụ AI & Audio chạy mượt mà
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR >= 3)
+  esp_task_wdt_config_t twdt_config = {
+      .timeout_ms = 30000,
+      .idle_core_mask = 0,
+      .trigger_panic = false
+  };
+  esp_task_wdt_reconfigure(&twdt_config);
+#else
+  esp_task_wdt_init(30, false);
+#endif
+
   // Khởi tạo đèn nền màn hình TFT ngay từ mili-giây đầu tiên để giữ điện áp ổn định, chống nháy đèn
   initTftBacklight();
 
@@ -571,12 +612,12 @@ void setup() {
   // Khởi tạo nút bấm cứng
   setupButtons();
 
-  // Khởi tạo Hồng Ngoại (Daikin & Receiver)
+  // Khởi tạo Hồng Ngoại (Daikin & IR Send)
   ac_daikin.begin();
   ac_daikin_160.begin();
   irsend.begin();
-  irrecv.enableIRIn();
-  Serial.println("📡 Đã bật bộ Thu & Phát Hồng Ngoại.");
+  // Không bật irrecv.enableIRIn() ở chế độ thường để tránh ngắt phần cứng 20,000 lần/giây gây giật LED & màn hình
+  Serial.println("📡 Đã khởi tạo bộ Phát Hồng Ngoại & Daikin.");
 
   // Khởi tạo Audio (Mic I2S và Loa MAX98357A)
   setupAudio();
@@ -607,6 +648,16 @@ void setup() {
   pixels.setBrightness(ledBrightness);
   pixels.show();
   setLedMode(0); // IDLE mode
+
+  xTaskCreatePinnedToCore(
+    ledTask,
+    "ledTask",
+    4096,
+    NULL,
+    2,
+    NULL,
+    0
+  );
   
   updateBootScreen(20); // Ket noi WiFi
   // Kết nối WiFi qua WiFiManager
@@ -702,18 +753,15 @@ void loop() {
   // 1. Quét nút cảm ứng liên tục
   handleTouch();
   
-  // 1.1 Cập nhật hiệu ứng LED vòng
-  handleLedAnimation();
-  
-  // 1.2 Học lệnh Hồng Ngoại (Nhận tín hiệu từ Remote)
-  if (irrecv.decode(&ir_results)) {
+  // 1.2 Học lệnh Hồng Ngoại (Chỉ xử lý khi đang ở chế độ học lệnh)
+  if (is_ir_learning_mode && irrecv.decode(&ir_results)) {
     Serial.println("\n📡 [IR Nhận Lệnh]");
     Serial.print("Giao thức: ");
     Serial.println(typeToString(ir_results.decode_type));
     Serial.print("Mã Hex: 0x");
     Serial.println(resultToHexidecimal(&ir_results));
     
-    if (is_ir_learning_mode && ir_results.decode_type != decode_type_t::UNKNOWN) {
+    if (ir_results.decode_type != decode_type_t::UNKNOWN) {
       if (selected_ir_idx < MAX_IR_SLOTS) {
         learned_ir[selected_ir_idx].type = ir_results.decode_type;
         learned_ir[selected_ir_idx].value = ir_results.value;
@@ -903,32 +951,26 @@ void loop() {
     fetchWeather();
   }
 
-  // 4. Đẩy dữ liệu cảm biến lên Firebase mỗi 10 giây
+  // 4. Đẩy dữ liệu cảm biến lên Firebase mỗi 10 giây (updateNodeAsync là hàm non-blocking async tức thời)
   static unsigned long lastFirebasePush = 0;
   if (firebase_ready && Firebase.ready() && (now - lastFirebasePush >= 10000)) {
     lastFirebasePush = now;
     FirebaseJson json;
-    // Lấy dữ liệu dạng số thực từ hw_sensors.h và thời tiết
-    json.set("temperature", indoorTemp); // Cho các widget cũ
+    json.set("temperature", indoorTemp);
     json.set("humidity", indoorHum);
-    json.set("indoorTemp", indoorTemp); // Dùng cho biểu đồ nhiệt độ mới
-    json.set("indoorHum", indoorHum);   // Dùng cho biểu đồ độ ẩm mới
+    json.set("indoorTemp", indoorTemp);
+    json.set("indoorHum", indoorHum);
     json.set("pressure", indoorPres);
     json.set("outdoor_temp", owmTemp);
     json.set("outdoor_desc", owmDesc);
-    
-    // Gửi dữ liệu theo đúng chuẩn Flutter Dashboard mong đợi
     json.set("outTemp", owmTemp);
     json.set("outHum", owmHum);
     json.set("outWindSpd", owmWind);
     json.set("outDesc", owmDesc);
     json.set("aiAdvice", ai_prediction_short);
-    
-    // Gửi timestamp để App Flutter biết Node đang Online
     time_t nowTime;
     time(&nowTime);
     json.set("last_seen", (int)nowTime);
-
     Firebase.RTDB.updateNodeAsync(&fbdo, FIREBASE_NODE, &json);
   }
 
@@ -962,14 +1004,15 @@ void loop() {
     triggerAiTextProcess(pendingWebCommand);
   }
 
-  // 7. Xử lý các tác vụ của LVGL Engine
+  // 7. Xử lý các tác vụ của LVGL Engine mượt mà chuẩn xác
   static unsigned long last_tick = 0;
-  unsigned long tick = millis() - last_tick;
-  last_tick = millis();
-  lv_tick_inc(tick); 
+  unsigned long now_ms = millis();
+  if (last_tick == 0) last_tick = now_ms;
+  unsigned long tick = now_ms - last_tick;
+  last_tick = now_ms;
+  if (tick > 0) lv_tick_inc(tick); 
   
   lv_timer_handler();
   processAudioLoop();
-  processAudioLoop();
-  vTaskDelay(pdMS_TO_TICKS(1));
+  yield();
 }
