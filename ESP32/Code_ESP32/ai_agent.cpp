@@ -250,11 +250,10 @@ void playTTS(String text, bool isPromptOnly, String customTtsUrl) {
     pendingTtsSpeech = "";
     Serial.printf("🔗 URL TTS tùy chỉnh: %s\n", customTtsUrl.c_str());
   } else {
-    // Sử dụng Vercel Cloud TTS Proxy (Ghép đa chunk MP3 mượt mà, tốc độ cao, không lỗi redirect)
-    String encodedText = urlEncode(ttsText);
-    pendingTtsUrl = "https://vercel-backend-woad-seven.vercel.app/api/tts?text=" + encodedText;
-    pendingTtsSpeech = "";
-    Serial.println("🔊 [Vercel Cloud TTS] Bàn giao URL cho Audio Engine: " + pendingTtsUrl);
+    // Luôn luôn dùng trực tiếp connecttospeech của ESP32-audioI2S (chuẩn m_f_tts native, phát ngay lập tức, to rõ 100%)
+    pendingTtsSpeech = ttsText;
+    pendingTtsUrl = "";
+    Serial.println("🗣️ [Native TTS Speech] Bàn giao câu thoại cho connecttospeech: " + ttsText);
   }
 
   // Bàn giao cho Main Loop trên Core 1 phát TTS an toàn

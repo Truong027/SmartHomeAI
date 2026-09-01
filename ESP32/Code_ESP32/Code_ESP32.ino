@@ -827,27 +827,27 @@ void loop() {
     }
   }
 
-  // 0. Xử lý kết nối phát TTS an toàn 100% trong Main Loop (Chống xung đột đa luồng & BearSSL Crash)
+  // 0. Xử lý kết nối phát TTS an toàn 100% trong Main Loop (Chống xung đột đa luồng)
   if (hasPendingTts) {
     hasPendingTts = false;
     if (audio.isRunning()) {
       audio.stopSong();
-      delay(30);
+      delay(40);
     }
     ttsAttemptTime = millis();
     wasAudioRunning = false;
-    if (pendingTtsUrl.length() > 0) {
-      String urlToPlay = pendingTtsUrl;
-      pendingTtsUrl = "";
-      pendingTtsSpeech = "";
-      Serial.println("🔊 [Audio Stream] Bắt đầu phát TTS URL: " + urlToPlay);
-      audio.connecttohost(urlToPlay.c_str());
-    } else if (pendingTtsSpeech.length() > 0) {
+    if (pendingTtsSpeech.length() > 0) {
       String speechText = pendingTtsSpeech;
       pendingTtsSpeech = "";
       pendingTtsUrl = "";
-      Serial.println("🗣️ [TTS Engine] Bắt đầu phát Speech: " + speechText);
+      Serial.println("🗣️ [TTS Engine] Bắt đầu phát Speech (m_f_tts = true): " + speechText);
       audio.connecttospeech(speechText.c_str(), "vi");
+    } else if (pendingTtsUrl.length() > 0) {
+      String urlToPlay = pendingTtsUrl;
+      pendingTtsUrl = "";
+      pendingTtsSpeech = "";
+      Serial.println("🔗 [TTS Engine] Bắt đầu phát URL Stream: " + urlToPlay);
+      audio.connecttohost(urlToPlay.c_str());
     }
   }
 
