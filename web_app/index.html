@@ -1,16 +1,16 @@
 <!DOCTYPE html>
-<html lang="vi">
+<html lang="vi" class="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>NORI AI Hub — Smart Home Terminal</title>
     
-    <!-- Typography: Plus Jakarta Sans & JetBrains Mono -->
+    <!-- Premium Typography: Plus Jakarta Sans, Inter & JetBrains Mono -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     
-    <!-- Font Awesome Icons -->
+    <!-- Font Awesome 6 Free Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <link rel="stylesheet" href="style.css">
     
@@ -23,19 +23,39 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
+    <!-- Ambient Holographic Glow Accents (Bunifu & Guna UI Cyber Halos) -->
     <div class="ambient-glow glow-1"></div>
     <div class="ambient-glow glow-2"></div>
+    <div class="ambient-glow glow-3"></div>
 
     <div class="app-layout">
-        <!-- Floating Header Nav -->
+        <!-- Floating Header Nav (shadcn/ui + Primer Style) -->
         <header class="app-header">
             <div class="header-brand">
-                <div class="brand-icon">
-                    <i class="fa-solid fa-microchip"></i>
+                <div class="brand-icon-wrap">
+                    <div class="brand-icon">
+                        <i class="fa-solid fa-microchip"></i>
+                    </div>
+                    <span class="brand-pulse-dot"></span>
                 </div>
                 <div class="brand-info">
-                    <span class="brand-name">NORI AI</span>
-                    <span class="brand-sub">Smart Hub Terminal</span>
+                    <div class="brand-title-row">
+                        <span class="brand-name">NORI AI</span>
+                        <span class="badge-tag">ESP32-S3</span>
+                    </div>
+                    <span class="brand-sub">Smart Terminal Hub</span>
+                </div>
+                
+                <!-- Real-time Clock & Lunar/Solar Calendar (Guna UI pill) -->
+                <div class="header-rtc-info">
+                    <div class="rtc-time-wrap">
+                        <i class="fa-regular fa-clock rtc-icon"></i>
+                        <span class="rtc-time" id="rtc-time">--:--</span>
+                    </div>
+                    <div class="rtc-dates-wrap">
+                        <span class="rtc-date rtc-solar" id="rtc-date-solar"><i class="fa-regular fa-calendar-days"></i> --/--</span>
+                        <span class="rtc-date rtc-lunar" id="rtc-date-lunar"><i class="fa-solid fa-moon"></i> -- AL</span>
+                    </div>
                 </div>
             </div>
             
@@ -50,19 +70,26 @@
             </div>
         </header>
 
-        <!-- Main Workbench Grid -->
+        <!-- Main Workbench Grid (12-Column Responsive Bento Layout) -->
         <main class="workbench-grid">
             
-            <!-- Bento Item 1: Voice & AI Intelligence Core -->
+            <!-- Bento Item 1: Voice & AI Intelligence Core (shadcn/ui + Bunifu Reactor) -->
             <section class="bento-card card-ai-core" aria-labelledby="ai-core-title">
+                <div class="card-glow-bar bar-cyan"></div>
                 <div class="card-header">
                     <div class="card-title-group">
-                        <i class="fa-solid fa-brain card-icon-accent"></i>
-                        <h2 id="ai-core-title" class="card-title">AI Voice Intelligence</h2>
+                        <div class="card-icon-badge badge-cyan">
+                            <i class="fa-solid fa-brain"></i>
+                        </div>
+                        <div>
+                            <h2 id="ai-core-title" class="card-title">AI Voice Intelligence</h2>
+                            <p class="card-subtitle">Trợ lý AI Nori & Nhận diện giọng nói</p>
+                        </div>
                     </div>
-                    <span class="badge-mono">ONLINE</span>
+                    <span class="status-chip chip-cyan"><i class="fa-solid fa-bolt"></i> ONLINE</span>
                 </div>
 
+                <!-- Holographic Voice Reactor Centerpiece (Bunifu UI style) -->
                 <div class="voice-centerpiece">
                     <div class="mic-trigger-wrap">
                         <button id="mic-btn" class="mic-button" aria-label="Bấm để nói với NORI" title="Bấm để nói chuyện với NORI">
@@ -74,11 +101,10 @@
                             </div>
                         </button>
                     </div>
-                    
-                    <p class="voice-prompt-hint">Nhấn và giữ (hoặc click) để nói chuyện với NORI</p>
+                    <p class="voice-prompt-hint"><i class="fa-solid fa-headset"></i> Chạm để nói chuyện trực tiếp với Nori</p>
                 </div>
 
-                <!-- AI Response & Transcription Panel -->
+                <!-- AI Response Speech Bubble (shadcn/ui callout) -->
                 <div class="ai-speech-bubble" id="speech-bubble">
                     <div class="bubble-header">
                         <span class="speaker-tag"><i class="fa-solid fa-sparkles"></i> Phản hồi từ Nori</span>
@@ -89,20 +115,20 @@
                     </div>
                 </div>
 
-                <!-- Command Input Box -->
+                <!-- Command Input Bar (shadcn/ui Input with Button) -->
                 <form id="text-command-form" class="command-form" onsubmit="return false;">
                     <div class="input-wrapper">
                         <i class="fa-solid fa-terminal input-icon"></i>
-                        <input type="text" id="command-input" placeholder="Gửi câu hỏi hoặc lệnh nhanh cho Nori..." autocomplete="off">
+                        <input type="text" id="command-input" placeholder="Nhập câu hỏi hoặc ra lệnh nhanh cho Nori..." autocomplete="off">
                         <button type="submit" id="send-command-btn" class="send-btn" aria-label="Gửi lệnh">
                             <i class="fa-solid fa-paper-plane"></i>
                         </button>
                     </div>
                 </form>
 
-                <!-- Quick Command Suggestions -->
+                <!-- Quick Command Suggestions (Guna UI Chips) -->
                 <div class="quick-chips-bar">
-                    <span class="chips-label">Lệnh mẫu:</span>
+                    <span class="chips-label">Gợi ý nhanh:</span>
                     <div class="chips-scroll">
                         <button type="button" class="quick-chip" data-cmd="Nhiệt độ trong phòng tôi thế nào?"><i class="fa-solid fa-temperature-half"></i> Nhiệt độ phòng</button>
                         <button type="button" class="quick-chip" data-cmd="Bật đèn"><i class="fa-regular fa-lightbulb"></i> Bật đèn</button>
@@ -110,72 +136,131 @@
                         <button type="button" class="quick-chip" data-cmd="Mở điều hòa 24 độ"><i class="fa-solid fa-snowflake"></i> Điều hòa 24°C</button>
                         <button type="button" class="quick-chip" data-cmd="Thời tiết hôm nay thế nào?"><i class="fa-solid fa-cloud-sun"></i> Thời tiết</button>
                         <button type="button" class="quick-chip" data-cmd="Bật quạt"><i class="fa-solid fa-fan"></i> Bật quạt</button>
+                        <button type="button" class="quick-chip" data-cmd="Báo cáo toàn bộ thông số nhà"><i class="fa-solid fa-chart-pie"></i> Báo cáo tổng thể</button>
                     </div>
                 </div>
             </section>
 
-            <!-- Bento Item 2: Climate & Environmental Telemetry -->
+            <!-- Bento Item 2: Climate & Environmental Telemetry (MaterialSkin + Guna Matrix) -->
             <section class="bento-card card-telemetry" aria-labelledby="telemetry-title">
+                <div class="card-glow-bar bar-emerald"></div>
                 <div class="card-header">
                     <div class="card-title-group">
-                        <i class="fa-solid fa-chart-line card-icon-accent"></i>
-                        <h2 id="telemetry-title" class="card-title">Môi Trường & Thời Tiết</h2>
+                        <div class="card-icon-badge badge-emerald">
+                            <i class="fa-solid fa-chart-line"></i>
+                        </div>
+                        <div>
+                            <h2 id="telemetry-title" class="card-title">Môi Trường & Khí Quyển</h2>
+                            <p class="card-subtitle">Cảm biến AHT20/30 & BMP280 + Trạm thời tiết</p>
+                        </div>
                     </div>
-                    <span class="badge-mono" id="live-time">--:--</span>
+                    <span class="badge-mono" id="live-time">--:--:--</span>
                 </div>
 
-                <!-- Metrics Summary Cards -->
+                <!-- 7 Telemetry Metrics Grid (Guna UI & Bunifu Tiles) -->
                 <div class="telemetry-metrics-grid">
+                    <!-- 1. Indoor Temperature -->
                     <div class="metric-cell metric-indoor-temp">
                         <div class="metric-icon"><i class="fa-solid fa-temperature-three-quarters"></i></div>
                         <div class="metric-data">
-                            <span class="metric-label">Trong phòng</span>
+                            <div class="metric-label-row">
+                                <span class="metric-label">Nhiệt độ phòng</span>
+                                <span class="metric-badge badge-temp-status" id="badge-indoor-temp">Mát mẻ</span>
+                            </div>
                             <span class="metric-value" id="web-indoor-temp">--°C</span>
                         </div>
                     </div>
 
+                    <!-- 2. Indoor Humidity -->
                     <div class="metric-cell metric-indoor-hum">
                         <div class="metric-icon"><i class="fa-solid fa-droplet"></i></div>
                         <div class="metric-data">
-                            <span class="metric-label">Độ ẩm phòng</span>
+                            <div class="metric-label-row">
+                                <span class="metric-label">Độ ẩm phòng</span>
+                                <span class="metric-badge badge-hum-status" id="badge-indoor-hum">Lý tưởng</span>
+                            </div>
                             <span class="metric-value" id="web-indoor-hum">--%</span>
                         </div>
                     </div>
 
+                    <!-- 3. Atmospheric Pressure -->
+                    <div class="metric-cell metric-pressure">
+                        <div class="metric-icon"><i class="fa-solid fa-gauge-high"></i></div>
+                        <div class="metric-data">
+                            <div class="metric-label-row">
+                                <span class="metric-label">Áp suất khí quyển</span>
+                                <span class="metric-badge badge-pres-status" id="badge-pres">Ổn định</span>
+                            </div>
+                            <span class="metric-value" id="web-pressure">-- hPa</span>
+                        </div>
+                    </div>
+
+                    <!-- 4. Outdoor Temperature -->
                     <div class="metric-cell metric-outdoor-temp">
                         <div class="metric-icon"><i class="fa-solid fa-sun-plant-wilt"></i></div>
                         <div class="metric-data">
-                            <span class="metric-label">Ngoài trời</span>
+                            <div class="metric-label-row">
+                                <span class="metric-label">Ngoài trời</span>
+                                <span class="metric-badge badge-out-temp-status" id="badge-out-temp">Nắng ấm</span>
+                            </div>
                             <span class="metric-value" id="web-out-temp">--°C</span>
                         </div>
                     </div>
 
+                    <!-- 5. Outdoor Humidity -->
+                    <div class="metric-cell metric-outdoor-hum">
+                        <div class="metric-icon"><i class="fa-solid fa-cloud-rain"></i></div>
+                        <div class="metric-data">
+                            <div class="metric-label-row">
+                                <span class="metric-label">Ẩm ngoài trời</span>
+                                <span class="metric-badge badge-out-hum-status" id="badge-out-hum">Bình thường</span>
+                            </div>
+                            <span class="metric-value" id="web-out-hum">--%</span>
+                        </div>
+                    </div>
+
+                    <!-- 6. Wind Speed -->
+                    <div class="metric-cell metric-wind">
+                        <div class="metric-icon"><i class="fa-solid fa-wind"></i></div>
+                        <div class="metric-data">
+                            <div class="metric-label-row">
+                                <span class="metric-label">Tốc độ gió</span>
+                                <span class="metric-badge badge-wind-status" id="badge-wind">Gió nhẹ</span>
+                            </div>
+                            <span class="metric-value" id="web-out-wind">-- m/s</span>
+                        </div>
+                    </div>
+
+                    <!-- 7. Weather Description -->
                     <div class="metric-cell metric-outdoor-weather">
                         <div class="metric-icon"><i class="fa-solid fa-cloud-sun"></i></div>
                         <div class="metric-data">
-                            <span class="metric-label">Bầu trời</span>
+                            <div class="metric-label-row">
+                                <span class="metric-label">Bầu trời</span>
+                                <span class="metric-badge badge-weather-status" id="badge-sky">Real-time</span>
+                            </div>
                             <span class="metric-value weather-desc" id="web-out-desc">--</span>
                         </div>
                     </div>
                 </div>
 
-                <!-- AI Advice Box -->
+                <!-- AI Advice Box (shadcn/ui Banner) -->
                 <div class="ai-advice-banner">
                     <div class="advice-icon"><i class="fa-solid fa-lightbulb"></i></div>
                     <div class="advice-body">
-                        <span class="advice-title">Lời khuyên từ Nori:</span>
-                        <p id="web-ai-advice" class="advice-text">Đang cập nhật phân tích thời tiết...</p>
+                        <span class="advice-title"><i class="fa-solid fa-wand-magic-sparkles"></i> Lời khuyên vi khí hậu từ Nori:</span>
+                        <p id="web-ai-advice" class="advice-text">Đang cập nhật phân tích điều kiện môi trường...</p>
                     </div>
                 </div>
 
-                <!-- Real-time Chart -->
+                <!-- Real-time Chart (Chart.js Glowing Graphs) -->
                 <div class="chart-container">
                     <div class="chart-header">
-                        <span class="chart-title"><i class="fa-solid fa-wave-square"></i> Diễn biến Nhiệt & Ẩm</span>
-                        <span class="chart-legend-custom">
-                            <span class="legend-dot temp-dot"></span> Nhiệt độ
-                            <span class="legend-dot hum-dot"></span> Độ ẩm
-                        </span>
+                        <span class="chart-title"><i class="fa-solid fa-wave-square"></i> Diễn biến Nhiệt độ & Độ ẩm theo thời gian</span>
+                        <div class="chart-legend-custom">
+                            <span class="legend-item"><span class="legend-dot temp-dot"></span> Nhiệt độ (°C)</span>
+                            <span class="legend-item"><span class="legend-dot hum-dot"></span> Độ ẩm (%)</span>
+                        </div>
                     </div>
                     <div class="canvas-wrap">
                         <canvas id="envChart"></canvas>
@@ -183,14 +268,21 @@
                 </div>
             </section>
 
-            <!-- Bento Item 3: Daikin AC Climate Controller -->
+            <!-- Bento Item 3: Daikin AC Climate Controller (CustomTkinter / Guna Dial) -->
             <section class="bento-card card-ac-climate" aria-labelledby="ac-title">
+                <div class="card-glow-bar bar-sky"></div>
                 <div class="card-header">
                     <div class="card-title-group">
-                        <i class="fa-solid fa-snowflake card-icon-accent"></i>
-                        <h2 id="ac-title" class="card-title">Điều Hòa Daikin</h2>
+                        <div class="card-icon-badge badge-sky">
+                            <i class="fa-solid fa-snowflake"></i>
+                        </div>
+                        <div>
+                            <h2 id="ac-title" class="card-title">Điều Hòa Daikin</h2>
+                            <p class="card-subtitle">Hồng ngoại IR 280/160-bit Dual Stream</p>
+                        </div>
                     </div>
                     
+                    <!-- Master Tactile Power Switch -->
                     <label class="tactile-switch" title="Bật/Tắt nguồn điều hòa">
                         <input type="checkbox" id="ac-power">
                         <span class="switch-slider"></span>
@@ -198,18 +290,19 @@
                 </div>
 
                 <div class="ac-control-deck" id="ac-deck">
-                    <!-- Temperature Circular Stepper Display -->
+                    <!-- Temperature Stepper Dial Display -->
                     <div class="ac-temp-stepper">
                         <button type="button" class="temp-stepper-btn" id="ac-temp-minus" aria-label="Giảm 1 độ">
                             <i class="fa-solid fa-minus"></i>
                         </button>
 
                         <div class="temp-dial-center">
+                            <div class="dial-arc-halo"></div>
                             <div class="dial-val-wrap">
                                 <span class="temp-big-num" id="ac-temp-val">25</span>
                                 <span class="temp-unit">°C</span>
                             </div>
-                            <span class="temp-target-label">Nhiệt độ mục tiêu</span>
+                            <span class="temp-target-label"><i class="fa-solid fa-bullseye"></i> Nhiệt độ mục tiêu</span>
                         </div>
 
                         <button type="button" class="temp-stepper-btn" id="ac-temp-plus" aria-label="Tăng 1 độ">
@@ -222,28 +315,28 @@
                         <input type="range" id="ac-temp-slider" min="18" max="32" value="25" class="custom-range range-cyan">
                     </div>
 
-                    <!-- Temp Quick Presets -->
+                    <!-- Temp Quick Presets (Guna UI Buttons) -->
                     <div class="temp-presets-row">
-                        <button type="button" class="preset-btn" data-temp="22">22°C Mát sâu</button>
-                        <button type="button" class="preset-btn active" data-temp="24">24°C Tiêu chuẩn</button>
-                        <button type="button" class="preset-btn" data-temp="26">26°C Tiết kiệm</button>
-                        <button type="button" class="preset-btn" data-temp="28">28°C Thoáng</button>
+                        <button type="button" class="preset-btn" data-temp="22"><i class="fa-solid fa-icicles"></i> 22°C Mát sâu</button>
+                        <button type="button" class="preset-btn active" data-temp="24"><i class="fa-solid fa-wind"></i> 24°C Chuẩn</button>
+                        <button type="button" class="preset-btn" data-temp="26"><i class="fa-solid fa-leaf"></i> 26°C Tiết kiệm</button>
+                        <button type="button" class="preset-btn" data-temp="28"><i class="fa-solid fa-feather"></i> 28°C Thoáng</button>
                     </div>
 
                     <!-- Fan Speed Control -->
                     <div class="ac-fan-section">
                         <div class="section-label-row">
-                            <span><i class="fa-solid fa-fan"></i> Tốc độ quạt</span>
+                            <span><i class="fa-solid fa-fan"></i> Tốc độ gió quạt</span>
                             <span id="ac-fan-val" class="mono-badge">Tự động (Auto)</span>
                         </div>
 
                         <div class="fan-chips-selector">
-                            <button type="button" class="fan-chip active" data-fan="10">Auto</button>
-                            <button type="button" class="fan-chip" data-fan="1">1</button>
-                            <button type="button" class="fan-chip" data-fan="2">2</button>
-                            <button type="button" class="fan-chip" data-fan="3">3</button>
-                            <button type="button" class="fan-chip" data-fan="4">4</button>
-                            <button type="button" class="fan-chip" data-fan="5">5</button>
+                            <button type="button" class="fan-chip active" data-fan="10"><i class="fa-solid fa-sliders"></i> Auto</button>
+                            <button type="button" class="fan-chip" data-fan="1">Cấp 1</button>
+                            <button type="button" class="fan-chip" data-fan="2">Cấp 2</button>
+                            <button type="button" class="fan-chip" data-fan="3">Cấp 3</button>
+                            <button type="button" class="fan-chip" data-fan="4">Cấp 4</button>
+                            <button type="button" class="fan-chip" data-fan="5">Cấp 5</button>
                         </div>
                         
                         <input type="range" id="ac-fan-slider" min="1" max="10" value="10" class="custom-range range-amber" style="display:none;">
@@ -251,14 +344,20 @@
                 </div>
             </section>
 
-            <!-- Bento Item 4: Device & Power Deck -->
+            <!-- Bento Item 4: Smart Devices & Power Deck (Bunifu / MaterialSkin) -->
             <section class="bento-card card-devices" aria-labelledby="devices-title">
+                <div class="card-glow-bar bar-amber"></div>
                 <div class="card-header">
                     <div class="card-title-group">
-                        <i class="fa-solid fa-sliders card-icon-accent"></i>
-                        <h2 id="devices-title" class="card-title">Thiết Bị Điện & Tải</h2>
+                        <div class="card-icon-badge badge-amber">
+                            <i class="fa-solid fa-sliders"></i>
+                        </div>
+                        <div>
+                            <h2 id="devices-title" class="card-title">Thiết Bị Điện & Tải</h2>
+                            <p class="card-subtitle">Công tắc Relay & Bộ chỉnh Dimmer / Volume</p>
+                        </div>
                     </div>
-                    <span class="badge-mono">I/O SWITCHES</span>
+                    <span class="status-chip chip-amber"><i class="fa-solid fa-network-wired"></i> HARDWARE I/O</span>
                 </div>
 
                 <!-- Relays Grid -->
@@ -275,8 +374,8 @@
                             </label>
                         </div>
                         <div class="relay-info">
-                            <span class="relay-title">Relay 1 (Ổ cắm / Đèn chính)</span>
-                            <span class="relay-status-text" id="relay1-status">Đang tắt</span>
+                            <span class="relay-title">Relay 1 (Khóa điện / Đèn chính)</span>
+                            <span class="relay-status-text" id="relay1-status">Đang tắt (OFF)</span>
                         </div>
                     </div>
 
@@ -292,63 +391,69 @@
                             </label>
                         </div>
                         <div class="relay-info">
-                            <span class="relay-title">Relay 2 (Tải phụ / Quạt)</span>
-                            <span class="relay-status-text" id="relay2-status">Đang tắt</span>
+                            <span class="relay-title">Relay 2 (Tải phụ / Quạt làm mát)</span>
+                            <span class="relay-status-text" id="relay2-status">Đang tắt (OFF)</span>
                         </div>
                     </div>
                 </div>
 
-                <!-- LED Dimmer Slider -->
+                <!-- LED Ring Dimmer Slider (WS2812B 12 LEDs) -->
                 <div class="device-slider-card">
                     <div class="slider-header-wrap">
                         <div class="slider-title-group">
-                            <i class="fa-regular fa-lightbulb"></i>
-                            <span>Độ sáng LED Dimmer</span>
+                            <div class="mini-icon icon-cyan"><i class="fa-regular fa-lightbulb"></i></div>
+                            <div>
+                                <span class="slider-main-title">Độ sáng LED Ring 12 Bóng</span>
+                                <span class="slider-sub-title">Chân D42 · Sub-pixel 50FPS</span>
+                            </div>
                         </div>
-                        <span id="led-val" class="mono-badge badge-cyan">100%</span>
+                        <span id="led-val" class="mono-badge badge-cyan">50%</span>
                     </div>
                     <div class="range-wrap">
-                        <input type="range" id="led-slider" min="0" max="255" value="255" class="custom-range range-cyan">
+                        <input type="range" id="led-slider" min="0" max="255" value="128" class="custom-range range-cyan">
                     </div>
                     <div class="slider-stepper-presets">
-                        <button type="button" class="stepper-chip" id="led-p-0">0% Tắt</button>
-                        <button type="button" class="stepper-chip" id="led-p-25">25% Dịu</button>
-                        <button type="button" class="stepper-chip" id="led-p-50">50% Vừa</button>
-                        <button type="button" class="stepper-chip" id="led-p-100">100% Sáng</button>
+                        <button type="button" class="stepper-chip" id="led-p-0"><i class="fa-solid fa-power-off"></i> 0% Tắt</button>
+                        <button type="button" class="stepper-chip" id="led-p-25"><i class="fa-solid fa-moon"></i> 25% Dịu</button>
+                        <button type="button" class="stepper-chip" id="led-p-50"><i class="fa-solid fa-circle-half-stroke"></i> 50% Vừa</button>
+                        <button type="button" class="stepper-chip" id="led-p-100"><i class="fa-solid fa-sun"></i> 100% Sáng</button>
                     </div>
                 </div>
 
-                <!-- Audio Volume Slider -->
+                <!-- Audio Volume Slider (I2S MAX98357A) -->
                 <div class="device-slider-card">
                     <div class="slider-header-wrap">
                         <div class="slider-title-group">
-                            <i class="fa-solid fa-volume-high"></i>
-                            <span>Âm lượng Loa ESP32</span>
+                            <div class="mini-icon icon-amber"><i class="fa-solid fa-volume-high"></i></div>
+                            <div>
+                                <span class="slider-main-title">Âm lượng Loa I2S ESP32</span>
+                                <span class="slider-sub-title">Mạch MAX98357A · Thư viện audioI2S</span>
+                            </div>
                         </div>
-                        <span id="volume-val" class="mono-badge badge-amber">100%</span>
+                        <span id="volume-val" class="mono-badge badge-amber">71%</span>
                     </div>
                     <div class="range-wrap">
-                        <input type="range" id="volume-slider" min="0" max="21" value="21" class="custom-range range-amber">
+                        <input type="range" id="volume-slider" min="0" max="21" value="15" class="custom-range range-amber">
                     </div>
                     <div class="slider-stepper-presets">
                         <button type="button" class="stepper-chip" id="vol-p-mute"><i class="fa-solid fa-volume-xmark"></i> Mute</button>
-                        <button type="button" class="stepper-chip" id="vol-p-33">33%</button>
-                        <button type="button" class="stepper-chip" id="vol-p-66">66%</button>
-                        <button type="button" class="stepper-chip" id="vol-p-max"><i class="fa-solid fa-volume-high"></i> Max</button>
+                        <button type="button" class="stepper-chip" id="vol-p-33">33% (7)</button>
+                        <button type="button" class="stepper-chip" id="vol-p-66">66% (14)</button>
+                        <button type="button" class="stepper-chip" id="vol-p-max"><i class="fa-solid fa-volume-high"></i> Max (21)</button>
                     </div>
                 </div>
             </section>
 
         </main>
 
-        <!-- Minimal Atmospheric Footer -->
+        <!-- Minimal Atmospheric Footer (shadcn/ui style) -->
         <footer class="app-footer">
             <div class="footer-left">
                 <span class="footer-dot"></span>
-                <span>ESP32 AI Hub Engine · v2.4</span>
+                <span>ESP32-S3 Dual-Core 240MHz · LVGL v9 · NORI Smart Engine</span>
             </div>
             <div class="footer-right">
-                <span>Realtime RTDB Asia-SE1</span>
+                <span>Firebase RTDB Asia-SE1 · Cloud Realtime Synchronized</span>
             </div>
         </footer>
     </div>

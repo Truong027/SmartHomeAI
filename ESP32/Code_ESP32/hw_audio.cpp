@@ -25,23 +25,23 @@ TaskHandle_t micReadTaskHandle = NULL;
 TaskHandle_t audioProcessTaskHandle = NULL;
 
 // --- AGC (Automatic Gain Control) & XiaoZhi VAD Constants ---
-static float agcGain = 4.5f;                 // Gain khởi điểm nhạy bén
-static const float AGC_TARGET_RMS = 4500.0f; // Mức RMS mong muốn cho giọng nói rõ ràng
-static const float AGC_MIN_GAIN = 1.5f;
-static const float AGC_MAX_GAIN = 12.0f;     // Khuếch đại giọng nói ở xa lên 12x êm ái
-static const float AGC_SMOOTH_OLD = 0.85f;
-static const float AGC_SMOOTH_NEW = 0.15f;
+static float agcGain = 3.5f;                 // Gain khởi điểm cân bằng
+static const float AGC_TARGET_RMS = 3000.0f; // Mức RMS mong muốn cho giọng nói rõ ràng
+static const float AGC_MIN_GAIN = 1.0f;
+static const float AGC_MAX_GAIN = 8.0f;      // Khuếch đại giọng nói ở xa lên 8x chuẩn xác, không kéo nhiễu nền
+static const float AGC_SMOOTH_OLD = 0.88f;
+static const float AGC_SMOOTH_NEW = 0.12f;
 
 // Bộ theo dõi mức ồn nền phòng tự động thích ứng (Adaptive Noise Floor)
 static float adaptiveNoiseFloor = 100.0f; 
 
 // Số block im lặng liên tiếp để ngắt (~0.6 giây ở 16ms/block)
-static const int VAD_SILENCE_TRIGGER_BLOCKS = 38; 
+static const int VAD_SILENCE_TRIGGER_BLOCKS = 30; 
 static int silence_block_count = 0;
 static int voice_activity_count = 0;
 
-// Bộ đệm xoay vòng lưu trước 8 blocks (~128ms) âm thanh để không bị nuốt âm đầu ("Hi", "Xin")
-static int16_t preroll_buffer[8][256];
+// Bộ đệm xoay vòng lưu trước 10 blocks (~160ms) âm thanh để không bị nuốt âm đầu ("Hi", "Xin")
+static int16_t preroll_buffer[10][256];
 static int preroll_head = 0;
 
 // Prototype cho các Task FreeRTOS
@@ -77,37 +77,43 @@ void generateStreamingWavHeader(uint8_t *header, uint32_t sampleRate, uint16_t n
     memcpy(&header[40], &subchunk2Size, 4);
 }
 
+static StaticTask_t *audioTaskBuffer = NULL;
+static StackType_t *audioTaskStack = NULL;
+
 void setupAudio() {
-  // Cấp phát bộ đệm recordBuffer trong PSRAM cho Groq STT
-  recordBuffer = (uint8_t *)ps_malloc(RECORD_BUFFER_SIZE);
-  if (!recordBuffer) {
-    Serial.println("❌ Lỗi cấp phát bộ nhớ PSRAM cho âm thanh!");
-  } else {
-    Serial.println("✅ Cấp phát thành công bộ đệm ghi âm (PSRAM)");
-  }
-
-  // Cấp phát Ring Buffer 16KB dạng ByteBuf của FreeRTOS
-  audio_ringbuf = xRingbufferCreate(16 * 1024, RINGBUF_TYPE_BYTEBUF);
-  if (audio_ringbuf == NULL) {
-    Serial.println("❌ Lỗi cấp phát FreeRTOS Ring Buffer (16KB)!");
-    return;
-  }
-  Serial.println("✅ Cấp phát thành công FreeRTOS Ring Buffer (16KB)");
-
-  // Setup I2S Loa (MAX98357A)
+  // 1. Cấu hình phần cứng Loa I2S DAC (MAX98357A: BCLK 15, LRC 16, DIN 17 trên I2S_NUM_0)
   audio.setPinout(I2S_AMP_BCLK, I2S_AMP_LRC, I2S_AMP_DIN);
   audio.setVolume(21);
-  audio.setConnectionTimeout(5000, 8000); // Tăng timeout kết nối và đọc HTTP stream
+  audio.setConnectionTimeout(3000, 5000);
+  Serial.println("🔊 Đã cấu hình phần cứng Loa I2S (MAX98357A).");
 
-  // Setup I2S Mic (INMP441)
-  i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_1, I2S_ROLE_MASTER);
-  if (i2s_new_channel(&chan_cfg, NULL, &rx_chan) != ESP_OK) {
-    Serial.println("❌ Lỗi cấp phát kênh I2S (Mic)!");
+  // 2. Cấp phát bộ đệm recordBuffer trong PSRAM cho Groq STT
+  recordBuffer = (uint8_t *)ps_malloc(RECORD_BUFFER_SIZE);
+  // Cấp phát Ring Buffer 16KB ưu tiên trong PSRAM (SPIRAM) để giải phóng triệt để SRAM nội bộ cho TLS/SSL
+  audio_ringbuf = xRingbufferCreateWithCaps(16 * 1024, RINGBUF_TYPE_BYTEBUF, MALLOC_CAP_SPIRAM);
+  if (audio_ringbuf == NULL) {
+    audio_ringbuf = xRingbufferCreate(8 * 1024, RINGBUF_TYPE_BYTEBUF);
+  }
+  if (audio_ringbuf == NULL) {
+    Serial.println("❌ Lỗi cấp phát FreeRTOS Ring Buffer!");
     return;
+  }
+  Serial.println("✅ Cấp phát thành công FreeRTOS Ring Buffer (PSRAM Optimized)");
+
+  // 4. Bật và cấu hình I2S Mic INMP441 trên kênh I2S_NUM_1 (Độc lập 100% với Loa I2S_NUM_0)
+  if (rx_chan == NULL) {
+    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_1, I2S_ROLE_MASTER);
+    chan_cfg.dma_desc_num = 6;
+    chan_cfg.dma_frame_num = 256;
+    chan_cfg.auto_clear = true;
+    if (i2s_new_channel(&chan_cfg, NULL, &rx_chan) != ESP_OK) {
+      Serial.println("❌ Lỗi tạo kênh I2S RX!");
+      return;
+    }
   }
 
   i2s_std_config_t std_cfg = {
-      .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(SAMPLE_RATE),
+      .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(16000), // 16kHz
       .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_MONO),
       .gpio_cfg = {
           .mclk = I2S_GPIO_UNUSED,
@@ -122,10 +128,10 @@ void setupAudio() {
           },
       },
   };
-  std_cfg.slot_cfg.slot_mask = I2S_STD_SLOT_LEFT; // Đọc khe LEFT
+  std_cfg.slot_cfg.slot_mask = I2S_STD_SLOT_LEFT;
 
   if (i2s_channel_init_std_mode(rx_chan, &std_cfg) != ESP_OK) {
-    Serial.println("❌ Lỗi khởi tạo cấu hình I2S (Mic)!");
+    Serial.println("❌ Lỗi cấu hình I2S chuẩn!");
     return;
   }
 
@@ -135,27 +141,36 @@ void setupAudio() {
   }
   Serial.println("✅ Mic I2S (INMP441) đã mở kênh Always-On.");
 
-  // Tạo Task Đọc Mic (Core 0, Ưu tiên 5 - Cao nhất cho mic)
+  // Tạo Task Đọc Mic (Core 0, Ưu tiên 2, Stack 2048 bytes)
   xTaskCreatePinnedToCore(
       micReadTask,
       "micReadTask",
-      4096,
+      2048,
       NULL,
-      5,
+      2,
       &micReadTaskHandle,
       0
   );
 
-  // Tạo Task Xử lý DSP & Auto-VAD (Ghim cố định trên Core 0, không can thiệp Core 1)
-  xTaskCreatePinnedToCore(
+  // Cấp phát Stack của audioProcessTask trong 8MB PSRAM để giải phóng triệt để SRAM nội bộ!
+  audioTaskBuffer = (StaticTask_t *)heap_caps_malloc(sizeof(StaticTask_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  audioTaskStack = (StackType_t *)heap_caps_malloc(8192 * sizeof(StackType_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+
+  if (audioTaskBuffer != NULL && audioTaskStack != NULL) {
+    audioProcessTaskHandle = xTaskCreateStaticPinnedToCore(
       audioProcessTask,
       "audioProcessTask",
       8192,
       NULL,
       1,
-      &audioProcessTaskHandle,
+      audioTaskStack,
+      audioTaskBuffer,
       0
-  );
+    );
+    Serial.println("✅ [Audio DSP] Đã cấp phát audioProcessTask Stack (8KB) trong PSRAM thành công!");
+  } else {
+    xTaskCreatePinnedToCore(audioProcessTask, "audioProcessTask", 3072, NULL, 1, &audioProcessTaskHandle, 0);
+  }
 }
 
 // --- TASK 1: ĐỌC I2S LIÊN TỤC CHỐNG TRÀN DMA & ĐẨY VÀO RING BUFFER (CORE 0) ---
@@ -168,17 +183,17 @@ void micReadTask(void *pvParameters) {
       // LUÔN LUÔN đọc I2S liên tục để xả DMA buffer chống nghẽn phần cứng
       esp_err_t err = i2s_channel_read(rx_chan, tempBuffer, sizeof(tempBuffer), &bytesRead, pdMS_TO_TICKS(50));
       if (err == ESP_OK && bytesRead > 0) {
-        // Luôn đẩy vào Ring Buffer khi hệ thống đã boot xong và có WiFi (hỗ trợ Barge-in ngắt tiếng)
-        if (system_ready && WiFi.status() == WL_CONNECTED) {
+        // Đẩy liên tục vào Ring Buffer khi hệ thống sẵn sàng và AI không bận
+        if (system_ready && WiFi.status() == WL_CONNECTED && !isAiBusy) {
           if (audio_ringbuf != NULL) {
-            xRingbufferSend(audio_ringbuf, tempBuffer, bytesRead, pdMS_TO_TICKS(10));
+            xRingbufferSend(audio_ringbuf, tempBuffer, bytesRead, pdMS_TO_TICKS(5));
           }
         }
       }
     } else {
       vTaskDelay(pdMS_TO_TICKS(10));
     }
-    vTaskDelay(pdMS_TO_TICKS(1)); // Nhường CPU 1ms cho FreeRTOS IDLE0 và Task Watchdog
+    vTaskDelay(pdMS_TO_TICKS(2)); // Nhường CPU cho Task AI Worker và TLS Handshake
   }
 }
 
@@ -214,6 +229,12 @@ void audioProcessTask(void *pvParameters) {
     bool currentAudioPlaying = audio.isRunning();
     if (wasAudioPlayingLast && !currentAudioPlaying) {
       lastAudioStopTime = millis();
+      flushAudioRingBuffer();
+      // Xóa sạch toàn bộ bộ đệm pre-roll tiếng loa còn sót lại
+      memset(preroll_buffer, 0, sizeof(preroll_buffer));
+      silence_block_count = 0;
+      voice_activity_count = 0;
+      has_started_speaking = false;
     }
     wasAudioPlayingLast = currentAudioPlaying;
 
@@ -222,10 +243,10 @@ void audioProcessTask(void *pvParameters) {
     int32_t *item = (int32_t *)xRingbufferReceive(audio_ringbuf, &item_size, pdMS_TO_TICKS(100));
 
     if (item != NULL) {
-      // Cooldown 350ms sau khi loa vừa phát xong để loại bỏ 100% tiếng pop / xì của IC khuếch đại
-      if (millis() - lastAudioStopTime < 350 || isAiBusy) {
+      // Cooldown ngắn 350ms sau khi loa vừa dừng hoặc khi AI đang bận xử lý STT/LLM
+      if (isAiBusy || (millis() - lastAudioStopTime < 350)) {
         vRingbufferReturnItem(audio_ringbuf, (void *)item);
-        vTaskDelay(pdMS_TO_TICKS(10));
+        vTaskDelay(pdMS_TO_TICKS(5));
         continue;
       }
 
@@ -273,70 +294,78 @@ void audioProcessTask(void *pvParameters) {
         }
 
         // =========================================================
-        // 4. QUẢN LÝ AUTO-VAD VÀ TÍNH NĂNG CẮT NGANG TIẾNG (BARGE-IN)
+        // 4. QUẢN LÝ AUTO-VAD VÀ TÍNH NĂNG CẮT NGANG TIẾNG (BREAKWORD / BARGE-IN)
         // =========================================================
 
         // TRƯỜNG HỢP A: LOA ĐANG PHÁT ÂM THANH (TTS hoặc Nhạc)
         if (audio.isRunning()) {
-          extern bool isMusicMode;
-          // 1. Khi đang PHÁT NHẠC (isMusicMode == true): Hỗ trợ cướp lời khi gọi "Hi Nori" to rõ
-          if (isMusicMode) {
-            float bargeInThreshold = max(6800.0f, adaptiveNoiseFloor * 2.2f + 2500.0f);
-            if (blockRMS >= bargeInThreshold && zcr >= 25 && zcr <= 85) {
-              voice_activity_count++;
-              if (voice_activity_count >= 6) { // 96ms có tiếng gọi mạnh mẽ vượt trên tiếng nhạc
-                voice_activity_count = 0;
-                silence_block_count = 0;
-                Serial.println("🛑 [Barge-in] Cướp lời: Dừng phát nhạc và chuyển sang Lắng nghe...");
-                hasPendingAudioStop = true; // Dừng nhạc ngay lập tức
-                stopMusicScreen();
-                isMusicMode = false;
-                hasPendingTts = false;
-                pendingTtsUrl = "";
-                pendingSongUrl = "";
-                pendingSongTitle = "";
-                isWaitingFollowupCommand = false;
-                isAiBusy = false;
-                setAIFaceState(AI_STATE_LISTENING);
-                setLedMode(2);
-                extern void setAIChatDialogue(String userText, String aiText);
-                setAIChatDialogue("Dang nghe...", "...");
-                uiUpdatePending = true;
-                startRecording(false);
+          // 1. Theo dõi mức âm lượng thích ứng của chính chiếc loa phát ra mic (Acoustic Echo Tracking)
+          static float speakerNoiseLevel = 2000.0f;
+          speakerNoiseLevel = 0.95f * speakerNoiseLevel + 0.05f * blockRMS;
+          if (speakerNoiseLevel < 800.0f) speakerNoiseLevel = 800.0f;
+
+          // 2. Ngưỡng cướp lời (Barge-in): Yêu cầu giọng người nói to, tạo bước nhảy năng lượng (Energy Spike) vượt trên tiếng loa hiện tại
+          float bargeInThreshold = max(4800.0f, speakerNoiseLevel * 1.65f + 1800.0f);
+          
+          // Kiểm tra tần số giọng nói người (ZCR 18 - 95)
+          if (blockRMS >= bargeInThreshold && zcr >= 18 && zcr <= 95) {
+            voice_activity_count++;
+            if (voice_activity_count >= 5) { // 80ms năng lượng giọng nói người lấn át hoàn toàn tiếng loa
+              voice_activity_count = 0;
+              silence_block_count = 0;
+              speakerNoiseLevel = 1000.0f;
+              Serial.printf("🛑 [Breakword Barge-in] PHÁT HIỆN GIỌNG NÓI CƯỚP LỜI! (RMS: %.0f > Ngưỡng Loa: %.0f | ZCR: %d). Ngắt loa ngay!\n", 
+                            blockRMS, bargeInThreshold, zcr);
+              hasPendingAudioStop = true;
+              if (audio.isRunning()) {
+                audio.stopSong();
               }
-            } else {
-              if (voice_activity_count > 0) voice_activity_count--;
-              adaptiveNoiseFloor = 0.98f * adaptiveNoiseFloor + 0.02f * blockRMS;
+              stopMusicScreen();
+              extern bool isMusicMode;
+              isMusicMode = false;
+              hasPendingTts = false;
+              pendingTtsUrl = "";
+              pendingSongUrl = "";
+              pendingSongTitle = "";
+              isWaitingFollowupCommand = false;
+              isAiBusy = false;
+              setAIFaceState(AI_STATE_LISTENING);
+              setLedMode(2); // LED Mode 2: Cyan Listening
+              extern void setAIChatDialogue(String userText, String aiText);
+              setAIChatDialogue("Dang nghe...", "...");
+              requestScreen(SCREEN_AI); // Chuyển an toàn sang màn hình AI không bị pha trộn
+              uiUpdatePending = true;
+              flushAudioRingBuffer();
+              startRecording(true); // Mở mic thu âm câu lệnh mới ngay lập tức
             }
+          } else {
+            if (voice_activity_count > 0) voice_activity_count--;
           }
-          // 2. Khi AI đang NÓI CHUYỆN (TTS): Giữ nguyên để AI nói trọn vẹn 100% câu thoại, không tự ngắt bởi tiếng quạt/tiếng ồn
-          // (Người dùng có thể nhấn Nút 3 bất kỳ lúc nào nếu muốn ngắt lời thủ công).
         }
-        // TRƯỜNG HỢP B: KHÔNG PHÁT ÂM THANH & ĐANG Ở TRẠNG THÁI CHỜ (STANDBY)
+          // TRƯỜNG HỢP B: KHÔNG PHÁT ÂM THANH & ĐANG Ở TRẠNG THÁI CHỜ (STANDBY)
         else if (!isRecording) {
-          // Lưu vào bộ đệm xoay vòng 8 blocks (~128ms)
+          // Lưu vào bộ đệm xoay vòng 10 blocks (~160ms)
           memcpy(preroll_buffer[preroll_head], pcmChunk, 512);
-          preroll_head = (preroll_head + 1) % 8;
+          preroll_head = (preroll_head + 1) % 10;
 
           // Cập nhật mức ồn nền phòng (Noise Floor) liên tục khi đang ở trạng thái chờ
           adaptiveNoiseFloor = 0.96f * adaptiveNoiseFloor + 0.04f * blockRMS;
-          if (adaptiveNoiseFloor < 30.0f) adaptiveNoiseFloor = 30.0f;
-          if (adaptiveNoiseFloor > 800.0f) adaptiveNoiseFloor = 800.0f;
+          if (adaptiveNoiseFloor < 40.0f) adaptiveNoiseFloor = 40.0f;
+          if (adaptiveNoiseFloor > 600.0f) adaptiveNoiseFloor = 600.0f;
 
-          // Cơ chế chống lặp gián đoạn (Cooldown): Nếu vừa có âm thanh lạ bị lọc bỏ, tạm nghỉ 1.2s
-          if (millis() - lastWakeWordCheckFail < 1200) {
+          // Cơ chế chống lặp gián đoạn (Cooldown): Nếu vừa có âm thanh lạ bị lọc bỏ, tạm nghỉ 2.0s
+          if (millis() - lastWakeWordCheckFail < 2000) {
             voice_activity_count = 0;
           } else {
-            // Ngưỡng phát hiện tiếng gọi Wake-Word ("Hi Nori", "Nori ơi"):
-            // Nhạy bén đón nhận giọng nói tự nhiên từ khoảng cách 1-3 mét (RMS >= 380)
-            float voiceStartThreshold = max(380.0f, adaptiveNoiseFloor * 1.4f + 120.0f);
+            // Ngưỡng phát hiện tiếng gọi Wake-Word ("Hi Nori", "Nori ơi") CHUẨN XÁC, CHỐNG TIẾNG ỒN QUẠT/PHÒNG:
+            float voiceStartThreshold = max(520.0f, adaptiveNoiseFloor * 1.6f + 220.0f);
 
-            if (blockRMS >= voiceStartThreshold && zcr >= 10 && zcr <= 120 && !isAiBusy) {
+            if (blockRMS >= voiceStartThreshold && zcr >= 16 && zcr <= 110 && !isAiBusy) {
               voice_activity_count++;
-              if (voice_activity_count >= 3) { // 48ms có năng lượng giọng nói rõ ràng
+              if (voice_activity_count >= 5) { // 80ms có năng lượng giọng nói thực sự, loại bỏ 100% tiếng động cơ khí/tiếng ồn giật
                 voice_activity_count = 0;
                 silence_block_count = 0;
-                Serial.printf("🎙️ [XiaoZhi-VAD] Phát hiện tiếng gọi! (RMS: %.0f | Ồn nền: %.0f | ZCR: %d). Bắt đầu thu âm xác thực Wake-Word...\n", 
+                Serial.printf("🎙️ [XiaoZhi-VAD] Phát hiện tiếng gọi! (RMS: %.0f | Ồn nền: %.0f | ZCR: %d). Bắt đầu thu âm...\n", 
                               blockRMS, adaptiveNoiseFloor, zcr);
                 startRecording(false);
               }
@@ -360,12 +389,12 @@ void audioProcessTask(void *pvParameters) {
 
           // PHA 1: CHỜ NGƯỜI DÙNG BẮT ĐẦU NÓI CÂU LỆNH
           if (!has_started_speaking) {
-            // Bỏ qua 300ms đầu tiên sau khi mở mic để lọc sạch tiếng vang phòng hoặc click loa
-            if (millis() - recordStartTime >= 300) {
-              float voiceStartThreshold = max(320.0f, adaptiveNoiseFloor * 1.4f + 100.0f);
-              if (blockRMS >= voiceStartThreshold && zcr >= 12) {
+            // Bỏ qua 150ms đầu tiên sau khi mở mic để lọc sạch click loa
+            if (millis() - recordStartTime >= 150) {
+              float voiceStartThreshold = max(380.0f, adaptiveNoiseFloor * 1.4f + 140.0f);
+              if (blockRMS >= voiceStartThreshold && zcr >= 15) {
                 voice_activity_count++;
-                if (voice_activity_count >= 6) { // Yêu cầu 96ms có năng lượng giọng nói thực sự, chống kích hoạt sớm bởi tiếng thở/click
+                if (voice_activity_count >= 3) { // 48ms là xác nhận đang nói
                   has_started_speaking = true;
                   voice_activity_count = 0;
                   silence_block_count = 0;
@@ -376,16 +405,18 @@ void audioProcessTask(void *pvParameters) {
               }
             }
 
-            // Hết thời gian chờ im lặng (6 giây rộng rãi) -> Tự hủy về IDLE mượt mà
-            if (millis() - recordStartTime >= 6000) {
-              Serial.println("⏱️ [XiaoZhi-VAD] Hết thời gian chờ (6s im lặng). Tự động đóng mic về IDLE.");
+            // Hết thời gian chờ im lặng (4.5s khi đối thoại liên tục/nhấn nút, 2.2s khi Auto-VAD) -> Tự động chuyển về IDLE
+            unsigned long maxWaitStart = isManualVoiceTrigger ? 4500 : 2200;
+            if (millis() - recordStartTime >= maxWaitStart) {
+              Serial.println("⏱️ [Continuous Dialogue] Hết 4.5s im lặng -> Tự động đóng Mic và chuyển về màn hình IDLE.");
               cancelRecording();
             }
           }
-          // PHA 2: NGƯỜI DÙNG ĐANG NÓI -> THEO DÕI DỨT CÂU
+          // PHA 2: NGƯỜI DÙNG ĐANG NÓI -> THEO DÕI DỨT CÂU SIÊU TỐC
           else {
-            // Ngưỡng phát hiện dứt câu / im lặng: Khi âm lượng tụt về gần mức ồn nền phòng
-            float voiceEndThreshold = max(180.0f, adaptiveNoiseFloor * 1.15f + 60.0f);
+            float voiceEndThreshold = isManualVoiceTrigger 
+                                      ? max(240.0f, adaptiveNoiseFloor * 1.2f + 60.0f)
+                                      : max(300.0f, adaptiveNoiseFloor * 1.3f + 80.0f);
 
             if (blockRMS < voiceEndThreshold) {
               silence_block_count++;
@@ -393,22 +424,22 @@ void audioProcessTask(void *pvParameters) {
               silence_block_count = 0;
             }
 
-            // TỰ ĐỘNG NGẮT KHI DỨT CÂU:
-            // Khi người dùng bấm nút thủ công / hỏi tiếp: Chờ 70 blocks (~1.12 giây) im lặng để người dùng nói chậm rãi, ngắt nghỉ suy nghĩ mà không bị cắt lời!
-            // Khi tự động kiểm tra Wake-Word: Chờ 25 blocks (~400ms) im lặng để phản hồi nhanh
-            int requiredSilenceBlocks = isManualVoiceTrigger ? 70 : 25;
-            size_t minRecordBytes = isManualVoiceTrigger ? 24000 : 16000;
+            // TỰ ĐỘNG NGẮT KHI DỨT CÂU SIÊU TỐC:
+            // Khi tự động Wake-Word: Chờ 12 blocks (~192ms) im lặng là ngắt và gửi xử lý ngay!
+            int requiredSilenceBlocks = isManualVoiceTrigger ? 30 : 12;
+            size_t minRecordBytes = isManualVoiceTrigger ? 8000 : 8000;
 
             if (silence_block_count >= requiredSilenceBlocks && recordIndex >= minRecordBytes) {
-              Serial.printf("🛑 [XiaoZhi-VAD] Đã nói xong (RMS: %.0f < Ngưỡng: %.0f). Tự động ngắt thu âm!\n", 
-                            blockRMS, voiceEndThreshold);
+              Serial.printf("🛑 [XiaoZhi-VAD] Đã dứt câu (RMS: %.0f < Ngưỡng: %.0f | Size: %d bytes). Ngắt thu âm gửi ngay!\n", 
+                            blockRMS, voiceEndThreshold, recordIndex);
               stopRecording(true);
             }
 
-            // Giới hạn thời gian nói tối đa (2.5s khi tự động Wake-Word, 10s khi nhấn nút)
-            unsigned long maxRecDuration = isManualVoiceTrigger ? 10000 : 2500;
+            // Giới hạn thời gian nói tối đa (1.8s khi tự động Wake-Word, 7s khi nói câu lệnh)
+            unsigned long maxRecDuration = isManualVoiceTrigger ? 7000 : 1800;
             if (millis() - recordStartTime >= maxRecDuration) {
-              Serial.printf("🛑 [XiaoZhi-VAD] Đạt thời lượng ghi âm tối đa (%lus). Ngắt thu âm.\n", maxRecDuration / 1000);
+              Serial.printf("🛑 [XiaoZhi-VAD] Đạt thời lượng ghi âm tối đa (%lus | %d bytes). Ngắt thu âm.\n", 
+                            maxRecDuration / 1000, recordIndex);
               stopRecording(true);
             }
           }
@@ -417,7 +448,6 @@ void audioProcessTask(void *pvParameters) {
 
       // Trả lại bộ nhớ cho Ring Buffer LUÔN LUÔN khi item khác NULL
       vRingbufferReturnItem(audio_ringbuf, (void *)item);
-      vTaskDelay(pdMS_TO_TICKS(2)); // Nhường CPU tick cho FreeRTOS IDLE0 và Task Watchdog
     } else {
       vTaskDelay(pdMS_TO_TICKS(5));
     }
@@ -430,62 +460,51 @@ void startRecording(bool isManual) {
     Serial.println("❌ startRecording thất bại: Mic chưa được khởi tạo!");
     return;
   }
-
-  // Ghi nhận nguồn kích hoạt: Thủ công từ nút cứng / Follow-up hay Tự động Wake-Word
-  isManualVoiceTrigger = isManual;
-
-  // Luôn giải phóng cờ bận khi bắt đầu ghi âm
-  isAiBusy = false;
-
-  // Dọn sạch rác cũ trong Ring Buffer trước khi thu âm
-  flushAudioRingBuffer();
-
-  Serial.printf("🎙️ Bắt đầu ghi âm (%s)...\n", isManual ? "Thủ công (Nút/Followup)" : "Tự động (VAD)");
   
-  // 1. Khởi tạo trạng thái
-  has_started_speaking = false; // Luôn chờ người dùng thực sự mở miệng nói (chờ tối đa 6 giây)
-  recordStartTime = millis();
-  silence_block_count = 0;
-  voice_activity_count = 0;
-  agcGain = 4.5f;
-  
-  extern void setAIChatDialogue(String userText, String aiText);
-  if (isManual) {
-    setAIChatDialogue("Dang nghe...", "...");
+  if (isRecording) {
+    return;
   }
+
+  // Đảm bảo dừng hoàn toàn loa và giải phóng socket mạng của Audio
+  if (audio.isRunning()) {
+    audio.stopSong();
+  }
+
+  isManualVoiceTrigger = isManual;
+  isRecording = true;
+  recordStartTime = millis();
+  recordIndex = 44; // Để dành 44 bytes đầu tiên cho WAV Header
+  voice_activity_count = 0;
+  silence_block_count = 0;
+  has_started_speaking = false;
   
-  // 2. Đặt recordIndex = 44 (chừa 44 byte đầu cho WAV Header)
-  recordIndex = 44;
-  if (recordBuffer) {
-    memset(recordBuffer, 0, RECORD_BUFFER_SIZE);
-    // Chèn 8 blocks (~128ms) âm thanh thu trước vào đầu file để giữ trọn vẹn âm đầu
-    for (int b = 0; b < 8; b++) {
-      int idx = (preroll_head + b) % 8;
+  // NẠP TRƯỚC ÂM THANH (PRE-ROLL) 10 BLOCKS (~160ms) ĐỂ KHÔNG MẤT ÂM ĐẦU CÂU ("Hi", "Bật", "Nori")
+  if (recordBuffer != nullptr) {
+    int idx = preroll_head;
+    for (int b = 0; b < 10; b++) {
       memcpy(&recordBuffer[recordIndex], preroll_buffer[idx], 512);
       recordIndex += 512;
+      idx = (idx + 1) % 10;
     }
   }
 
-  // 3. Bật cờ ghi âm
-  isRecording = true;
+  Serial.println(isManual ? "🎙️ [Hybrid Mic] BẮT ĐẦU GHI ÂM THỦ CÔNG (Manual Button)..." 
+                          : "🎙️ [Hybrid Mic] BẮT ĐẦU GHI ÂM TỰ ĐỘNG (Auto Wake-Word VAD)...");
 }
 
-void stopRecording(bool forceProcess) {
+void stopRecording(bool sendToAI) {
   if (!isRecording) return;
-  isRecording = false; // Tắt cờ ghi âm (Mic I2S vẫn đọc xả DMA bình thường)
+  isRecording = false;
 
-  silence_block_count = 0;
-  voice_activity_count = 0;
-
-  Serial.printf("🛑 Kết thúc ghi âm. Dung lượng: %d bytes (Manual: %s)\n", 
-                recordIndex, isManualVoiceTrigger ? "YES" : "NO");
-
-  // Ghi 44 byte WAV Header chuẩn vào đầu mảng recordBuffer
-  if (recordBuffer != nullptr && recordIndex > 44) {
-    createWavHeader(recordBuffer, recordIndex - 44);
+  if (!sendToAI || recordIndex <= 44) {
+    Serial.println("⏹️ [Hybrid Mic] Đã hủy phiên ghi âm (0 bytes âm thanh).");
+    return;
   }
 
-  // Tính RMS trung bình của toàn bộ file ghi âm để xác nhận có tiếng nói thật sự
+  // Ghi chuẩn WAV Header 16kHz, 16-bit, Mono vào 44 bytes đầu
+  createWavHeader(recordBuffer, recordIndex - 44);
+
+  // Tính RMS trung bình của toàn bộ file ghi âm
   int64_t total_sq = 0;
   int total_samples = (recordIndex - 44) / 2;
   int16_t *samples = (int16_t *)&recordBuffer[44];
@@ -494,16 +513,16 @@ void stopRecording(bool forceProcess) {
   }
   float avg_rms = (total_samples > 0) ? sqrtf((float)((double)total_sq / total_samples)) : 0.0f;
 
-  // Lọc xung âm thanh tại chỗ (Impulse Filter): Loại bỏ hoàn toàn tiếng vỗ tay, ho, gõ bàn ngắn (<200ms)
-  if (!isManualVoiceTrigger && (recordIndex < 14000 || avg_rms < 220.0f)) {
-    Serial.printf("⚠️ [Acoustic Filter] Bỏ qua xung âm ngắn/tiếng ồn/vỗ tay (RMS: %.0f, Size: %d bytes). 0 tốn API!\n", 
-                  avg_rms, recordIndex);
-    cancelRecording();
-    return;
-  }
+  Serial.printf("🛑 Kết thúc ghi âm. Dung lượng: %d bytes | RMS TB: %.0f (Manual: %s | Spoken: %s)\n", 
+                recordIndex, avg_rms, isManualVoiceTrigger ? "YES" : "NO", has_started_speaking ? "YES" : "NO");
+
+  // BỘ LỌC TẠI CHỖ (ACOUSTIC FILTER): Lọc sạch tiếng ồn nền/tiếng thở/vỗ tay
+  bool isValidAudio = isManualVoiceTrigger 
+                      ? (has_started_speaking && recordIndex >= 8000)
+                      : (has_started_speaking && recordIndex >= 14000 && avg_rms >= 220.0f);
 
   // Gửi mảng âm thanh sang Background Worker Task trên Core 0 nếu người dùng THỰC SỰ ĐÃ NÓI
-  if (has_started_speaking && recordIndex > 12000 && avg_rms > 110.0f) {
+  if (isValidAudio) {
     if (isManualVoiceTrigger) {
       setAIFaceState(AI_STATE_THINKING);
       setLedMode(1); // Chuyển sang hiệu ứng LED Thinking
@@ -516,9 +535,10 @@ void stopRecording(bool forceProcess) {
     isAiBusy = true; // Khóa Auto-VAD ngay lập tức để không kích hoạt trùng lặp
     triggerAiAudioProcess(recordBuffer, recordIndex);
   } else {
-    Serial.printf("⚠️ [Audio Filter] Bỏ qua âm thanh rỗng/chưa nói câu lệnh (RMS: %.0f, Size: %d bytes, Spoken: %s).\n", 
+    Serial.printf("⚠️ [Audio Filter] Bỏ qua âm thanh rỗng/nhiễu phòng (RMS: %.0f, Size: %d bytes, Spoken: %s). 0 tốn API!\n", 
                   avg_rms, recordIndex, has_started_speaking ? "YES" : "NO");
     cancelRecording();
+    lastWakeWordCheckFail = millis(); // Kích hoạt Cooldown 2.0s để không lặp lại liên tục
   }
   has_started_speaking = false;
 }
@@ -534,18 +554,18 @@ void cancelRecording() {
   isManualVoiceTrigger = false;
   isAiBusy = false;
   
-  // Chỉ reset màn hình về IDLE nếu trước đó là chế độ gọi AI (Manual)
-  // Nếu là Auto-Wake-Word chạy ngầm không hợp lệ -> giữ nguyên màn hình chính mà không làm gián đoạn
+  // Tự động chuyển về trạng thái IDLE sẵn sàng khi hết thời gian chờ
   if (wasManual) {
     setAIFaceState(AI_STATE_IDLE);
     setLedMode(0);
+    requestScreen(SCREEN_AI);
+    extern void setAIChatDialogue(String userText, String aiText);
+    setAIChatDialogue("San sang...", "...");
     uiUpdatePending = true;
+    Serial.println("⏱️ [Continuous Dialogue] Không phát hiện câu hỏi tiếp theo -> Tự động chuyển về trạng thái IDLE sẵn sàng!");
   }
 }
 
 void processAudioLoop() {
-  if (audio.isRunning()) {
-    audio.loop();
-    audio.loop();
-  }
+  audio.loop();
 }

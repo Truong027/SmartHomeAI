@@ -14,7 +14,7 @@ function runMiddleware(req, res, fn) {
   });
 }
 
-function splitTextIntoChunks(text, maxLen = 160) {
+function splitTextIntoChunks(text, maxLen = 200) {
   const chunks = [];
   let remaining = String(text).replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
   
@@ -80,7 +80,7 @@ module.exports = async function handler(req, res) {
   }
 
   const lang = req.query.lang || 'vi';
-  const chunks = splitTextIntoChunks(text, 160);
+  const chunks = splitTextIntoChunks(text, 200);
 
   console.log(`🔊 Generating Vercel Cloud TTS (${chunks.length} chunks) for: "${text.substring(0, 100)}..."`);
 
@@ -117,7 +117,17 @@ module.exports = async function handler(req, res) {
       })
     );
 
-    const combinedAudio = Buffer.concat(audioBuffers);
+    // Ghép audio sạch và loại bỏ ID3 tags thừa ở các chunk phía sau
+    const cleanedBuffers = audioBuffers.map((buf, idx) => {
+      if (idx === 0) return buf;
+      if (buf.length > 10 && buf[0] === 0x49 && buf[1] === 0x44 && buf[2] === 0x33) { // 'ID3'
+        const tagSize = ((buf[6] & 0x7F) << 21) | ((buf[7] & 0x7F) << 14) | ((buf[8] & 0x7F) << 7) | (buf[9] & 0x7F);
+        return buf.slice(10 + tagSize);
+      }
+      return buf;
+    });
+
+    const combinedAudio = Buffer.concat(cleanedBuffers);
 
     res.setHeader('Content-Type', 'audio/mpeg');
     res.setHeader('Accept-Ranges', 'bytes');

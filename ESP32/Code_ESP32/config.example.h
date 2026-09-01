@@ -76,8 +76,11 @@ static const char* weatherApiUrl     = "https://api.openweathermap.org/data/2.5/
 #define FIREBASE_USER_PASSWORD "123456"
 #define FIREBASE_NODE          "/ESP32_AI_Hub"
 
-// ─── Groq API Configuration ───────────────────────────────────────────────────
+// ─── Groq Multi-Key API Configuration (3 Keys xoay vòng chống nghẽn 429) ───
 // Đăng ký API Key siêu tốc miễn phí tại: https://console.groq.com/keys
-#define GROQ_API_KEY           "gsk_YOUR_GROQ_API_KEY"
+#define GROQ_KEY_1             "gsk_YOUR_GROQ_API_KEY_1"
+#define GROQ_KEY_2             "gsk_YOUR_GROQ_API_KEY_2"
+#define GROQ_KEY_3             "gsk_YOUR_GROQ_API_KEY_3"
+#define GROQ_API_KEY           GROQ_KEY_1
 
 #endif // CODE_ESP32_CONFIG_EXAMPLE_H

@@ -1,0 +1,50 @@
+# =============================================================================
+# NORI SMART HOME AI - GITIGNORE CONFIGURATION
+# Bảo mật toàn diện API Keys, Thông tin cấu hình và Tệp tin rác
+# =============================================================================
+
+# --- 1. CONFIG & SECRETS (Bảo mật 100% API Keys & Thông tin nhạy cảm) ---
+ESP32/Code_ESP32/config.h
+web_app/config.js
+.env
+.env.*
+*.key
+*.pem
+secrets/
+
+# --- 2. BUILD & COMPILATION ARTIFACTS ---
+**/build/
+ESP32/Code_ESP32/build/
+.pio/
+*.bin
+*.hex
+*.elf
+
+# --- 3. NODE.JS & SERVERLESS DEPLOYMENTS ---
+node_modules/
+vercel_backend/node_modules/
+.vercel/
+vercel_backend/.vercel/
+vercel_backend/*-player-script.js
+package-lock.json
+
+# --- 4. FIREBASE DEPLOY CACHE ---
+web_app/.firebase/
+
+# --- 5. TEMPORARY FILES & LOGS ---
+*.log
+transcript_tail.txt
+extracted.txt
+temp.txt
+ESP32/Code_ESP32/temp.txt
+dashboard_chunk.txt
+diff.patch
+
+# --- 6. IDE & OS SYSTEM FILES ---
+.vscode/
+.idea/
+*.swp
+*.bak
+*~
+.DS_Store
+Thumbs.db

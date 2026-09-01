@@ -12,6 +12,7 @@ volatile bool uiUpdatePending = false;
 String hhmmText = "00:00";
 String dateSolar = "00/00/0000";
 float indoorTemp = 0.0f;
+uint8_t currentSecond = 0;
 float indoorHum = 0.0f;
 float indoorPres = 0.0f;
 float owmTemp = 0.0f;
@@ -51,8 +52,9 @@ lv_obj_t * label_ir_title = nullptr;
 lv_obj_t * label_ir_info = nullptr;
 
 lv_obj_t * label_music_title = nullptr;
+lv_obj_t * label_music_sub = nullptr;
 lv_obj_t * label_music_status = nullptr;
-lv_obj_t * eq_bar[7] = {nullptr};
+lv_obj_t * eq_bar[9] = {nullptr};
 lv_timer_t * music_eq_timer = nullptr;
 
 // AI Face, Orb & Dialogue objects
@@ -116,9 +118,37 @@ void my_disp_flush(lv_display_t *disp, const lv_area_t *area, uint8_t * px_map) 
 }
 
 // ==========================================
+// THREAD-SAFE SCREEN SWITCHING SYSTEM
+// ==========================================
+volatile ScreenType pendingScreenLoad = SCREEN_NONE;
+
+void requestScreen(ScreenType scr) {
+  pendingScreenLoad = scr;
+  uiUpdatePending = true;
+}
+
+void handlePendingScreenSwitch() {
+  if (pendingScreenLoad != SCREEN_NONE) {
+    ScreenType target = pendingScreenLoad;
+    pendingScreenLoad = SCREEN_NONE;
+    if (target == SCREEN_MAIN && screen_main) {
+      pendingAiFaceState = -1;
+      lv_screen_load(screen_main);
+    } else if (target == SCREEN_AI && screen_ai) {
+      lv_screen_load(screen_ai);
+    } else if (target == SCREEN_MUSIC && screen_music) {
+      lv_screen_load(screen_music);
+    } else if (target == SCREEN_IR && screen_ir) {
+      lv_screen_load(screen_ir);
+    }
+  }
+}
+
+// ==========================================
 // 1. MÀN HÌNH KHỞI ĐỘNG (BOOT SCREEN)
 // ==========================================
 void updateBootScreen(int progress) {
+  handlePendingScreenSwitch();
   lv_timer_handler();
 }
 
@@ -174,19 +204,19 @@ void setupMainScreen() {
   lv_obj_set_style_pad_all(dial_center, 0, 0);
   lv_obj_set_scrollbar_mode(dial_center, LV_SCROLLBAR_MODE_OFF);
 
-  // Dynamic Temperature Arc Gauge (Encircles the top of the clock)
+  // Dynamic Seconds Arc Gauge (Lấp đầy vòng tròn theo giây, màu sắc theo nhiệt độ)
   arc_temp_gauge = lv_arc_create(dial_center);
   lv_obj_set_size(arc_temp_gauge, 80, 80);
   lv_obj_align(arc_temp_gauge, LV_ALIGN_CENTER, 0, 0);
-  lv_arc_set_rotation(arc_temp_gauge, 140);
-  lv_arc_set_bg_angles(arc_temp_gauge, 0, 260);
-  lv_arc_set_range(arc_temp_gauge, 15, 40);
-  lv_arc_set_value(arc_temp_gauge, (int)indoorTemp);
+  lv_arc_set_rotation(arc_temp_gauge, 270);   // Bắt đầu từ đỉnh 12h
+  lv_arc_set_bg_angles(arc_temp_gauge, 0, 360); // Vòng tròn đầy đủ 360°
+  lv_arc_set_range(arc_temp_gauge, 0, 59);    // Range = 0-59 giây
+  lv_arc_set_value(arc_temp_gauge, 0);
   lv_obj_remove_style(arc_temp_gauge, NULL, LV_PART_KNOB); // No knob
   lv_obj_set_style_arc_width(arc_temp_gauge, 4, LV_PART_MAIN);
   lv_obj_set_style_arc_color(arc_temp_gauge, lv_color_hex(0x1E293B), LV_PART_MAIN);
   lv_obj_set_style_arc_width(arc_temp_gauge, 4, LV_PART_INDICATOR);
-  lv_obj_set_style_arc_color(arc_temp_gauge, lv_color_hex(0xFF6A00), LV_PART_INDICATOR); // Radiant Cyber Orange
+  lv_obj_set_style_arc_color(arc_temp_gauge, lv_color_hex(0x10B981), LV_PART_INDICATOR); // Mặc định xanh ngọc
   lv_obj_set_style_arc_rounded(arc_temp_gauge, true, LV_PART_INDICATOR);
 
   // Big Glowing Digital Clock
@@ -303,11 +333,8 @@ void setupMainScreen() {
 }
 
 void showMainScreen() {
-  pendingAiFaceState = -1; // Tránh main loop load lại screen_ai
-  if (screen_main) {
-    lv_screen_load(screen_main);
-    setLedMode(0); // IDLE
-  }
+  requestScreen(SCREEN_MAIN);
+  setLedMode(0); // IDLE
 }
 
 // Cập nhật giao diện Main Dashboard với cơ chế Smart Dirty-Checking (Chỉ vẽ lại khi có số liệu thay đổi thực sự)
@@ -319,7 +346,6 @@ void updateLVGL_UI() {
   static String last_out_temp = "";
   static int last_relay1 = -1;
   static int last_relay2 = -1;
-  static int last_temp_arc = -1;
 
   if (label_time && hhmmText != last_hhmm) {
     last_hhmm = hhmmText;
@@ -333,22 +359,38 @@ void updateLVGL_UI() {
     lv_label_set_text(label_date, fullDateStr.c_str());
   }
 
-  // Cập nhật Cung Vòng Cung Nhiệt Độ Thực Tế (Dynamic Comfort Arc)
-  int arcVal = (int)indoorTemp;
-  if (arcVal < 15) arcVal = 15;
-  if (arcVal > 40) arcVal = 40;
-  if (arc_temp_gauge && arcVal != last_temp_arc) {
-    last_temp_arc = arcVal;
-    lv_arc_set_value(arc_temp_gauge, arcVal);
-    // Đổi sắc cung Arc theo nhiệt độ
-    if (arcVal >= 32) {
-      lv_obj_set_style_arc_color(arc_temp_gauge, lv_color_hex(0xEF4444), LV_PART_INDICATOR); // Đỏ nhiệt
-    } else if (arcVal >= 28) {
-      lv_obj_set_style_arc_color(arc_temp_gauge, lv_color_hex(0xFF7A00), LV_PART_INDICATOR); // Cam Hổ Phách
-    } else if (arcVal <= 22) {
-      lv_obj_set_style_arc_color(arc_temp_gauge, lv_color_hex(0x38BDF8), LV_PART_INDICATOR); // Xanh Băng
-    } else {
-      lv_obj_set_style_arc_color(arc_temp_gauge, lv_color_hex(0x10B981), LV_PART_INDICATOR); // Xanh Ngọc Mát
+  // Cập nhật Vòng Cung Giây (Lấp đầy 360° theo giây hiện tại, đổi màu theo nhiệt độ)
+  static int last_sec_arc = -1;
+  static int last_temp_color_band = -1;
+  int secVal = (int)currentSecond;
+  if (secVal < 0) secVal = 0;
+  if (secVal > 59) secVal = 59;
+  
+  // Xác định dải màu nhiệt độ (0=lạnh, 1=mát, 2=ấm, 3=nóng)
+  int tempBand = 1; // mặc định mát
+  int arcTemp = (int)indoorTemp;
+  if (arcTemp >= 35)      tempBand = 3; // Nóng bỏng
+  else if (arcTemp >= 30) tempBand = 2; // Ấm
+  else if (arcTemp >= 23) tempBand = 1; // Mát mẻ lý tưởng
+  else                    tempBand = 0; // Lạnh
+  
+  bool needUpdate = (secVal != last_sec_arc) || (tempBand != last_temp_color_band);
+  if (arc_temp_gauge && needUpdate) {
+    last_sec_arc = secVal;
+    lv_arc_set_value(arc_temp_gauge, secVal);
+    
+    // Đổi sắc Arc theo nhiệt độ phòng
+    if (tempBand != last_temp_color_band) {
+      last_temp_color_band = tempBand;
+      if (tempBand == 3) {
+        lv_obj_set_style_arc_color(arc_temp_gauge, lv_color_hex(0xEF4444), LV_PART_INDICATOR); // Đỏ nóng
+      } else if (tempBand == 2) {
+        lv_obj_set_style_arc_color(arc_temp_gauge, lv_color_hex(0xFF7A00), LV_PART_INDICATOR); // Cam ấm
+      } else if (tempBand == 1) {
+        lv_obj_set_style_arc_color(arc_temp_gauge, lv_color_hex(0x10B981), LV_PART_INDICATOR); // Xanh ngọc mát
+      } else {
+        lv_obj_set_style_arc_color(arc_temp_gauge, lv_color_hex(0x38BDF8), LV_PART_INDICATOR); // Xanh băng lạnh
+      }
     }
   }
 
@@ -861,10 +903,8 @@ void setupIrScreen() {
 }
 
 void showIrScreen() {
-  if (screen_ir) {
-    lv_screen_load(screen_ir);
-    setLedMode(15);
-  }
+  requestScreen(SCREEN_IR);
+  setLedMode(15);
 }
 
 void updateIrScreen(int index, String protocol, String hexCode) {
@@ -903,9 +943,16 @@ void updateIrScreen(int index, String protocol, String hexCode) {
 // ==========================================
 void music_eq_cb(lv_timer_t * timer) {
   if (!screen_music) return;
-  for (int i = 0; i < 7; i++) {
+  static float phase = 0.0f;
+  phase += 0.35f;
+  for (int i = 0; i < 9; i++) {
     if (eq_bar[i]) {
-      int h = random(5, 34);
+      // Sóng âm hài hòa sống động kết hợp ngẫu nhiên nhẹ
+      float wave = sinf(phase + i * 0.75f) * 11.0f + 14.0f;
+      int jitter = random(-3, 4);
+      int h = (int)(wave + jitter);
+      if (h < 4) h = 4;
+      if (h > 30) h = 30;
       lv_obj_set_height(eq_bar[i], h);
     }
   }
@@ -913,16 +960,16 @@ void music_eq_cb(lv_timer_t * timer) {
 
 void setupMusicScreen() {
   screen_music = lv_obj_create(NULL);
-  lv_obj_set_style_bg_color(screen_music, lv_color_hex(0x050816), 0); // Atmospheric Deep Indigo
+  lv_obj_set_style_bg_color(screen_music, lv_color_hex(0x030712), 0); // Ultra Deep Obsidian Velvet
 
-  // Header Title Capsule: NOW PLAYING
+  // 1. Header Capsule: NOW PLAYING • HI-FI
   lv_obj_t * header_capsule = lv_obj_create(screen_music);
-  lv_obj_set_size(header_capsule, 110, 18);
-  lv_obj_align(header_capsule, LV_ALIGN_TOP_MID, 0, 4);
-  lv_obj_set_style_bg_color(header_capsule, lv_color_hex(0x0F172A), 0);
+  lv_obj_set_size(header_capsule, 126, 17);
+  lv_obj_align(header_capsule, LV_ALIGN_TOP_MID, 0, 3);
+  lv_obj_set_style_bg_color(header_capsule, lv_color_hex(0x0B132B), 0);
   lv_obj_set_style_border_width(header_capsule, 1, 0);
-  lv_obj_set_style_border_color(header_capsule, lv_color_hex(0x1E293B), 0);
-  lv_obj_set_style_radius(header_capsule, 9, 0);
+  lv_obj_set_style_border_color(header_capsule, lv_color_hex(0x00F0FF), 0);
+  lv_obj_set_style_radius(header_capsule, 8, 0);
   lv_obj_set_style_pad_all(header_capsule, 0, 0);
   lv_obj_set_layout(header_capsule, LV_LAYOUT_FLEX);
   lv_obj_set_flex_flow(header_capsule, LV_FLEX_FLOW_ROW);
@@ -931,31 +978,41 @@ void setupMusicScreen() {
   lv_obj_t * header = lv_label_create(header_capsule);
   lv_obj_set_style_text_color(header, lv_color_hex(0x00F0FF), 0);
   lv_obj_set_style_text_font(header, &lv_font_montserrat_10, 0);
-  lv_label_set_text(header, "NOW PLAYING");
+  lv_label_set_text(header, "NOW PLAYING • HI-FI");
 
-  // Song Title Glass Card
+  // 2. Song Info Glass Card (Thẻ kính sang trọng)
   lv_obj_t * title_card = lv_obj_create(screen_music);
-  lv_obj_set_size(title_card, 152, 26);
-  lv_obj_align(title_card, LV_ALIGN_CENTER, 0, -22);
-  lv_obj_set_style_bg_color(title_card, lv_color_hex(0x0F172A), 0);
+  lv_obj_set_size(title_card, 154, 34);
+  lv_obj_align(title_card, LV_ALIGN_TOP_MID, 0, 23);
+  lv_obj_set_style_bg_color(title_card, lv_color_hex(0x0D1B2A), 0);
   lv_obj_set_style_border_width(title_card, 1, 0);
-  lv_obj_set_style_border_color(title_card, lv_color_hex(0x1E293B), 0);
+  lv_obj_set_style_border_color(title_card, lv_color_hex(0x1B263B), 0);
   lv_obj_set_style_radius(title_card, 6, 0);
   lv_obj_set_style_pad_all(title_card, 2, 0);
 
+  // Tên bài hát hiển thị chính giữa, cuộn tròn mượt mà
   label_music_title = lv_label_create(title_card);
-  lv_obj_set_style_text_color(label_music_title, lv_color_hex(0xF8FAFC), 0);
+  lv_obj_set_style_text_color(label_music_title, lv_color_hex(0xFFFFFF), 0);
   lv_obj_set_style_text_font(label_music_title, &lv_font_montserrat_12, 0);
-  lv_obj_set_width(label_music_title, 144);
+  lv_obj_set_width(label_music_title, 146);
   lv_obj_set_style_text_align(label_music_title, LV_TEXT_ALIGN_CENTER, 0);
   lv_label_set_long_mode(label_music_title, LV_LABEL_LONG_SCROLL_CIRCULAR);
   lv_label_set_text(label_music_title, "Dang tai bai hat...");
-  lv_obj_align(label_music_title, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_align(label_music_title, LV_ALIGN_TOP_MID, 0, 0);
 
-  // Equalizer Spectrum Container (7 Bars with Neon Gradient)
+  // Dòng phụ đề nguồn phát nhạc
+  label_music_sub = lv_label_create(title_card);
+  lv_obj_set_style_text_color(label_music_sub, lv_color_hex(0x38BDF8), 0);
+  lv_obj_set_style_text_font(label_music_sub, &lv_font_montserrat_10, 0);
+  lv_obj_set_width(label_music_sub, 146);
+  lv_obj_set_style_text_align(label_music_sub, LV_TEXT_ALIGN_CENTER, 0);
+  lv_label_set_text(label_music_sub, "Studio Master Direct Stream");
+  lv_obj_align(label_music_sub, LV_ALIGN_BOTTOM_MID, 0, -1);
+
+  // 3. Bộ Equalizer 9 Cột Spectrum Neon Gradient cực kỳ sống động
   lv_obj_t * eq_cont = lv_obj_create(screen_music);
-  lv_obj_set_size(eq_cont, 144, 40);
-  lv_obj_align(eq_cont, LV_ALIGN_CENTER, 0, 16);
+  lv_obj_set_size(eq_cont, 150, 36);
+  lv_obj_align(eq_cont, LV_ALIGN_TOP_MID, 0, 61);
   lv_obj_set_style_bg_opa(eq_cont, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(eq_cont, 0, 0);
   lv_obj_set_style_pad_all(eq_cont, 0, 0);
@@ -963,24 +1020,27 @@ void setupMusicScreen() {
   lv_obj_set_flex_flow(eq_cont, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(eq_cont, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
 
-  const uint32_t eq_colors[7] = {0x00F0FF, 0x06B6D4, 0x10B981, 0x8B5CF6, 0xF43F5E, 0xF59E0B, 0x00F0FF};
+  const uint32_t eq_colors[9] = {
+    0x00F0FF, 0x38BDF8, 0x3B82F6, 0x6366F1, 0x8B5CF6, 
+    0xEC4899, 0xF43F5E, 0xF59E0B, 0x10B981
+  };
 
-  for (int i = 0; i < 7; i++) {
+  for (int i = 0; i < 9; i++) {
     eq_bar[i] = lv_obj_create(eq_cont);
-    lv_obj_set_size(eq_bar[i], 12, 8);
+    lv_obj_set_size(eq_bar[i], 10, 8);
     lv_obj_set_style_bg_color(eq_bar[i], lv_color_hex(eq_colors[i]), 0);
-    lv_obj_set_style_radius(eq_bar[i], 3, 0);
+    lv_obj_set_style_radius(eq_bar[i], 2, 0);
     lv_obj_set_style_border_width(eq_bar[i], 0, 0);
   }
 
-  // Footer Streaming Quality Badge
+  // 4. Footer Streaming Quality Badge
   label_music_status = lv_label_create(screen_music);
   lv_obj_set_style_text_color(label_music_status, lv_color_hex(0x10B981), 0);
   lv_obj_set_style_text_font(label_music_status, &lv_font_montserrat_10, 0);
-  lv_label_set_text(label_music_status, "128kbps Hi-Fi Audio Stream");
-  lv_obj_align(label_music_status, LV_ALIGN_BOTTOM_MID, 0, -4);
+  lv_label_set_text(label_music_status, "ONLINE • 128Kbps Lossless");
+  lv_obj_align(label_music_status, LV_ALIGN_BOTTOM_MID, 0, -3);
 
-  music_eq_timer = lv_timer_create(music_eq_cb, 100, NULL);
+  music_eq_timer = lv_timer_create(music_eq_cb, 80, NULL);
   lv_timer_pause(music_eq_timer);
 }
 
@@ -988,12 +1048,15 @@ void showMusicScreen(String songTitle) {
   if (!screen_music) return;
   if (label_music_title) {
     if (songTitle.length() > 0) {
-      lv_label_set_text(label_music_title, songTitle.c_str());
+      // Khử sạch 100% dấu tiếng Việt để loại bỏ triệt để lỗi ký tự ô vuông trên font ASCII
+      String cleanTitle = cleanDisplayText(removeVietnameseAccents(songTitle));
+      cleanTitle.trim();
+      lv_label_set_text(label_music_title, cleanTitle.c_str());
     } else {
       lv_label_set_text(label_music_title, "Music Streaming");
     }
   }
-  lv_screen_load(screen_music);
+  requestScreen(SCREEN_MUSIC);
   if (music_eq_timer) lv_timer_resume(music_eq_timer);
   setLedMode(15); // Rainbow effect theo nhịp nhạc
 }

@@ -21,6 +21,7 @@ extern bool bmp_ready;
 extern bool rtc_ready;
 extern String hhmmText;
 extern String dateSolar;
+extern uint8_t currentSecond;
 extern String dateLunar;
 extern int lunarDay_global;
 extern int lunarMonth_global;
@@ -198,6 +199,7 @@ inline void updateSensors() {
       
       hhmmText = String(timeBuf);
       dateSolar = String(dateBuf);
+      currentSecond = nowRtc.second();
 
       // Tính toán Âm Lịch Thiên Văn (Chỉ tính khi qua ngày mới)
       static int lastComputedDay = -1;

@@ -1,0 +1,14 @@
+{
+  "rules": {
+    ".read": "auth != null",
+    ".write": "auth != null",
+    "ESP32_AI_Hub": {
+      ".read": true,
+      ".write": true
+    },
+    "smart_home": {
+      ".read": true,
+      ".write": true
+    }
+  }
+}

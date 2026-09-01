@@ -33,9 +33,10 @@ function cleanMusicQuery(q) {
   while (cleaned !== prev) {
     prev = cleaned;
     cleaned = cleaned
-      .replace(/^(hãy mở|hay mo|hãy bật|hay bat|hãy phát|hay phat|mở giúp tôi|mo giup toi|bật giúp tôi|bat giup toi|phát giúp tôi|phat giup toi|mở cho tôi|mo cho toi|bật cho tôi|bat cho toi|phát cho tôi|phat cho toi|mở hộ tôi|mo ho toi|bật hộ tôi|bat ho toi|phát hộ tôi|phat ho toi|cho tôi nghe|cho tôi nghe|cho mình nghe|cho minh nghe|cho nghe|mở bài hát|mo bai hat|bật bài hát|bat bai hat|phát bài hát|phat bai hat|mở bài nhạc|mo bai nhac|bật bài nhạc|bat bai nhac|phát bài nhạc|phat bai nhac|mở bài|mo bai|bật bài|bat bai|phát bài|phat bai|hát bài|hat bai|nghe bài|nghe bai|mở ca khúc|mo ca khuc|bật ca khúc|bat ca khuc|phát ca khúc|phat ca khuc|mở nhạc|mo nhac|bật nhạc|bat nhac|phát nhạc|phat nhac|nghe nhạc|nghe nhac|tìm bài|tim bai|tìm nhạc|tim nhac|hát nhạc|hat nhac|play)\s+/gi, '')
-      .replace(/^(cho tôi|cho toi|cho mình|cho minh|cho nghe|cho em|cho anh|tôi muốn|toi muon|mình muốn|minh muon|muốn nghe|muon nghe|muốn bật|muon bat|muốn mở|muon mo|muốn phát|muon phat)\s+/gi, '')
-      .replace(/^(bài hát|bai hat|bài nhạc|bai nhac|ca khúc|ca khuc)\s+/gi, '')
+      .replace(/^(hãy\s+)?(mở|mo|bật|bat|phát|phat|nghe|hát|hat|tìm|tim|play)\s+(cho|giúp|giup|hộ|ho|với|voi)?\s*(tôi|toi|to|toa|tao|mình|minh|em|anh|chị|chi|bạn|ban|ta)?\s*(nghe)?\s*(một|mot|vài|vai)?\s*(bài hát|bai hat|bài nhạc|bai nhac|bài|bai|ca khúc|ca khuc|nhạc|nhac|bài ca|bai ca)?\s+/gi, '')
+      .replace(/^(cho|giúp|giup|hộ|ho)\s*(tôi|toi|to|toa|tao|mình|minh|em|anh|chị|chi|bạn|ban|ta)\s*(nghe)?\s*(một|mot|vài|vai)?\s*(bài hát|bai hat|bài nhạc|bai nhac|bài|bai|ca khúc|ca khuc|nhạc|nhac)?\s+/gi, '')
+      .replace(/^(tôi|toi|mình|minh|em|anh|chị|chi|bạn|ban)\s+(muốn|muon|thích|thich|cần|can)\s+(nghe|mở|mo|bật|bat|phát|phat)\s+(bài hát|bai hat|bài nhạc|bai nhac|bài|bai|ca khúc|ca khuc|nhạc|nhac)?\s+/gi, '')
+      .replace(/^(bài hát|bai hat|bài nhạc|bai nhac|ca khúc|ca khuc|bài|bai|nhạc|nhac)\s+/gi, '')
       .replace(/\s+(đi|nào|nao|nha|nhé|nhe|với|voi|ạ|a|nhé bạn|nhe ban|nha bạn|nha ban)$/gi, '')
       .trim();
   }

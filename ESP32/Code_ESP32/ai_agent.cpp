@@ -46,6 +46,8 @@ extern void updateIrScreen(int slotIndex, String protocol, String hexCode);
 // Biến lưu trạng thái tốc độ quạt (0: tắt, 1, 2, 3)
 int current_fan_speed = 0;
 bool isAiBusy = false;
+volatile bool pendingReturnToMain = false;
+volatile bool pendingReturnToRemote = false;
 
 // --- BỘ NHỚ LÂU DÀI BỀN VỮNG (LONG-TERM PERSISTENT MEMORY TRONG FLASH & FIREBASE) ---
 Preferences aiMem;
@@ -206,21 +208,30 @@ void playTTS(String text, bool isPromptOnly, String customTtsUrl) {
 
   if (text.length() == 0) return;
 
-  // Giữ lại đầy đủ nội dung chi tiết (lên tới 700 ký tự)
+  // Giới hạn độ dài câu nói tối đa 220 ký tự để Google TTS đọc mượt mà, trôi chảy nhất
   String ttsText = text;
-  if (ttsText.length() > 700) {
+  if (ttsText.length() > 220) {
     int cutIdx = -1;
-    for (int i = 700; i >= 400; i--) {
+    for (int i = 220; i >= 120; i--) {
       char c = ttsText.charAt(i);
       if (c == '.' || c == '?' || c == '!' || c == ';') {
         cutIdx = i + 1;
         break;
       }
     }
+    if (cutIdx == -1) {
+      for (int i = 220; i >= 120; i--) {
+        char c = ttsText.charAt(i);
+        if (c == ',' || c == ':') {
+          cutIdx = i;
+          break;
+        }
+      }
+    }
     if (cutIdx != -1) {
       ttsText = ttsText.substring(0, cutIdx);
     } else {
-      ttsText = ttsText.substring(0, 700);
+      ttsText = ttsText.substring(0, 220);
     }
     ttsText.trim();
   }
@@ -238,17 +249,12 @@ void playTTS(String text, bool isPromptOnly, String customTtsUrl) {
     pendingTtsUrl = customTtsUrl;
     pendingTtsSpeech = "";
     Serial.printf("🔗 URL TTS tùy chỉnh: %s\n", customTtsUrl.c_str());
-  } else if (ttsText.length() <= 160) {
-    // Với các câu <= 160 ký tự: Dùng trực tiếp connecttospeech của ESP32-audioI2S (chuẩn m_f_tts, phát trọn vẹn 100% không nuốt âm)
-    pendingTtsSpeech = ttsText;
-    pendingTtsUrl = "";
-    Serial.println("🗣️ [Native TTS Speech] Bàn giao câu thoại cho connecttospeech: " + ttsText);
   } else {
-    // Với các câu dài > 160 ký tự: Dùng Vercel backend
-    String b64 = base64UrlEncode(ttsText);
-    pendingTtsUrl = "https://vercel-backend-woad-seven.vercel.app/api/tts.mp3?b64=" + b64 + "&lang=vi";
+    // Sử dụng HTTP thuần Port 80 (chống 100% lỗi BearSSL mConnectSSL / BR_SSL_SENDAPP, phát siêu tốc không tốn SSL RAM)
+    String encodedText = urlEncode(ttsText);
+    pendingTtsUrl = "http://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=vi&q=" + encodedText;
     pendingTtsSpeech = "";
-    Serial.printf("🔗 URL TTS Vercel: %s\n", pendingTtsUrl.c_str());
+    Serial.println("🔊 [HTTP TTS Stream] Bàn giao URL cho Audio Engine: " + pendingTtsUrl);
   }
 
   // Bàn giao cho Main Loop trên Core 1 phát TTS an toàn
@@ -302,70 +308,123 @@ void processAudioAI(uint8_t* audioData, size_t size) {
   
   String response = "";
   {
+    WiFi.setSleep(false);
+    if (audio.isRunning()) {
+      audio.stopSong();
+    }
+    vTaskDelay(pdMS_TO_TICKS(50));
+
     WiFiClientSecure client;
     client.setInsecure();
-    client.setTimeout(8000);
+    client.setTimeout(12000);
     client.setHandshakeTimeout(6);
-    
-    if (!client.connect("api.groq.com", 443)) {
-      Serial.println("❌ Không thể kết nối Groq API (Thử lại...)");
-      vTaskDelay(pdMS_TO_TICKS(250));
-      if (!client.connect("api.groq.com", 443)) {
-        Serial.println("❌ Lỗi kết nối Groq API!");
-        isAiBusy = false;
-        if (isManualVoiceTrigger) {
-          setAIFaceState(AI_STATE_IDLE);
-          setLedMode(0);
+
+    // KÊNH 1: Gửi qua Vercel Serverless STT Proxy (Nhanh gấp 3 lần, truyền Stream trực tiếp)
+    Serial.printf("🚀 Đang gửi %d bytes âm thanh lên Cloud STT Proxy (Free Heap: %u, Max Block: %u)...\n", 
+                  size, ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+
+    bool connected = false;
+    bool useVercel = true;
+
+    if (client.connect("vercel-backend-woad-seven.vercel.app", 443)) {
+      connected = true;
+      useVercel = true;
+    } else {
+      char errBuf[100] = {0};
+      client.lastError(errBuf, sizeof(errBuf));
+      client.stop();
+      Serial.printf("⚠️ [Vercel Proxy Connect Fail: %s] -> Chuyển sang kết nối Groq STT Direct...\n", errBuf);
+      
+      // KÊNH 2 (Fallback): Kết nối trực tiếp Groq
+      if (client.connect("api.groq.com", 443)) {
+        connected = true;
+        useVercel = false;
+      } else {
+        client.lastError(errBuf, sizeof(errBuf));
+        client.stop();
+        Serial.printf("❌ [Groq Direct Fail: %s] Thử lại lần cuối...\n", errBuf);
+        vTaskDelay(pdMS_TO_TICKS(500));
+        if (client.connect("api.groq.com", 443)) {
+          connected = true;
+          useVercel = false;
         }
-        return;
       }
     }
-  
-  String boundary = "----ESP32Boundary";
-  String head = "--" + boundary + "\r\n"
-                "Content-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\n"
-                "Content-Type: audio/wav\r\n\r\n";
-  String tail = "\r\n--" + boundary + "\r\n"
-                "Content-Disposition: form-data; name=\"model\"\r\n\r\n"
-                "whisper-large-v3-turbo\r\n"
-                "--" + boundary + "\r\n"
-                "Content-Disposition: form-data; name=\"language\"\r\n\r\n"
-                "vi\r\n"
-                "--" + boundary + "\r\n"
-                "Content-Disposition: form-data; name=\"temperature\"\r\n\r\n"
-                "0\r\n"
-                "--" + boundary + "\r\n"
-                "Content-Disposition: form-data; name=\"prompt\"\r\n\r\n"
-                "Hi Nori. Xin chào Nori. Nori ơi. Hey Nori. Chào Nori. Trở về màn hình chính. Mở remote. Học lệnh. Quay về dashboard. Trở về. Tôi muốn nghe nhạc. Mở nhạc cho tôi nghe. Phát bài hát. Bật đèn 1. Tắt đèn 1. Bật đèn 2. Tắt đèn 2. Mở quạt. Tắt quạt. Bật điều hòa. Tắt điều hòa. Tăng âm lượng. Giảm âm lượng. Độ sáng đèn. Edge Impulse. TensorFlow Lite. Arduino IDE. Thời tiết hôm nay thế nào. Âm lịch hôm nay. Cho tôi thông tin chi tiết về giá vàng ngày hôm nay. Tin tức thời sự.\r\n"
-                "--" + boundary + "--\r\n";
-                
-  // audioData đã chứa sẵn 44 byte WAV header ở đầu (size đã bao gồm 44 bytes)
-  uint32_t contentLen = head.length() + size + tail.length();
-  
-  client.println("POST /openai/v1/audio/transcriptions HTTP/1.1");
-  client.println("Host: api.groq.com");
-  client.println("Authorization: Bearer " + String(GROQ_API_KEY));
-  client.println("Content-Type: multipart/form-data; boundary=" + boundary);
-  client.print("Content-Length: ");
-  client.println(contentLen);
-  client.println();
-  
-  client.print(head);
-  
-  // Gửi toàn bộ mảng audioData theo chunk 2KB để đẩy dữ liệu cực nhanh qua TCP mà không nghẽn CPU
-  size_t bytesSent = 0;
-  while(bytesSent < size) {
-    size_t chunk = min((size_t)2048, size - bytesSent);
-    client.write(&audioData[bytesSent], chunk);
-    bytesSent += chunk;
-    vTaskDelay(pdMS_TO_TICKS(2));
-  }
-  client.print(tail);
-  client.flush();
-  
-    // Đọc phản hồi từ Groq API (Cho phép tối đa 12 giây để Whisper nhận diện câu dài)
+    
+    if (!connected) {
+      Serial.println("❌ Lỗi kết nối Cloud STT!");
+      isAiBusy = false;
+      if (isManualVoiceTrigger) {
+        setAIFaceState(AI_STATE_IDLE);
+        setLedMode(0);
+      }
+      return;
+    }
+
+    if (useVercel) {
+      // Gửi Raw WAV Stream cực kỳ nhẹ nhàng lên Vercel STT Proxy
+      client.println("POST /api/stt HTTP/1.1");
+      client.println("Host: vercel-backend-woad-seven.vercel.app");
+      client.println("Content-Type: audio/wav");
+      client.print("Content-Length: ");
+      client.println(size);
+      client.println("Connection: close");
+      client.println();
+
+      size_t bytesSent = 0;
+      while(bytesSent < size) {
+        size_t chunk = min((size_t)1440, size - bytesSent);
+        client.write(&audioData[bytesSent], chunk);
+        bytesSent += chunk;
+      }
+      client.flush();
+    } else {
+      // Gửi Multipart Form-Data trực tiếp lên Groq
+      String boundary = "----ESP32Boundary";
+      String head = "--" + boundary + "\r\n"
+                    "Content-Disposition: form-data; name=\"model\"\r\n\r\n"
+                    "whisper-large-v3-turbo\r\n"
+                    "--" + boundary + "\r\n"
+                    "Content-Disposition: form-data; name=\"language\"\r\n\r\n"
+                    "vi\r\n"
+                    "--" + boundary + "\r\n"
+                    "Content-Disposition: form-data; name=\"response_format\"\r\n\r\n"
+                    "json\r\n"
+                    "--" + boundary + "\r\n"
+                    "Content-Disposition: form-data; name=\"temperature\"\r\n\r\n"
+                    "0\r\n"
+                    "--" + boundary + "\r\n"
+                    "Content-Disposition: form-data; name=\"prompt\"\r\n\r\n"
+                    "Hi Nori, Hey Nori, Nori oi, chao Nori\r\n"
+                    "--" + boundary + "\r\n"
+                    "Content-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\n"
+                    "Content-Type: audio/wav\r\n\r\n";
+      String tail = "\r\n--" + boundary + "--\r\n";
+      uint32_t contentLen = head.length() + size + tail.length();
+      
+      client.println("POST /openai/v1/audio/transcriptions HTTP/1.1");
+      client.println("Host: api.groq.com");
+      client.println("Authorization: Bearer " + String(GROQ_API_KEY));
+      client.println("Content-Type: multipart/form-data; boundary=" + boundary);
+      client.print("Content-Length: ");
+      client.println(contentLen);
+      client.println("Connection: close");
+      client.println();
+      
+      client.print(head);
+      size_t bytesSent = 0;
+      while(bytesSent < size) {
+        size_t chunk = min((size_t)1440, size - bytesSent);
+        client.write(&audioData[bytesSent], chunk);
+        bytesSent += chunk;
+      }
+      client.print(tail);
+      client.flush();
+    }
+    
+    // Đọc phản hồi JSON từ Server (Timeout tối đa 6 giây)
     unsigned long startWait = millis();
-    while (client.connected() && (millis() - startWait < 12000)) {
+    while (client.connected() && (millis() - startWait < 6000)) {
       while (client.available()) {
         response += (char)client.read();
         startWait = millis();
@@ -376,13 +435,13 @@ void processAudioAI(uint8_t* audioData, size_t size) {
         response = response.substring(jsonStart, jsonEnd + 1);
         break;
       }
-      vTaskDelay(pdMS_TO_TICKS(15));
+      vTaskDelay(pdMS_TO_TICKS(5));
     }
     
     client.stop();
   } // Giải phóng hoàn toàn mbedTLS SSL heap context trước khi gọi LLM
   
-  vTaskDelay(pdMS_TO_TICKS(250)); // Đảm bảo lwIP dọn dẹp sạch sẽ socket cũ
+  vTaskDelay(pdMS_TO_TICKS(60));
   
   JsonDocument doc;
   deserializeJson(doc, response);
@@ -391,12 +450,21 @@ void processAudioAI(uint8_t* audioData, size_t size) {
   if (text && strlen(text) > 0) {
     String transcribedText = String(text);
     transcribedText.trim();
+    Serial.printf("🎙️ [Groq Whisper STT] Nhận diện được: \"%s\"\n", transcribedText.c_str());
+    
+    // Nếu chuỗi rỗng hoặc chỉ có dấu câu lặt vặt
+    if (transcribedText.length() == 0 || transcribedText == "." || transcribedText == "..." || 
+        transcribedText == "?" || transcribedText == "!" || transcribedText == "-" || transcribedText == ",") {
+      Serial.println("⚠️ [Whisper Filter] Chuỗi nhận diện rỗng/chỉ có dấu câu. Bỏ qua!");
+      isAiBusy = false;
+      return;
+    }
     
     extern String removeVietnameseAccents(String text);
     String lowerT = removeVietnameseAccents(transcribedText);
     lowerT.toLowerCase();
 
-    // 🛑 LỌC BỎ ẢO GIÁC YOUTUBE (Whisper hallucination khi nhận âm thanh im lặng/tiếng ồn nền)
+    // 🛑 LỌC BỎ ẢO GIÁC YOUTUBE (Whisper hallucination khi nhận âm thanh im lặng/tiếng ồn nền/video)
     if (lowerT.indexOf("subscribe") != -1 || lowerT.indexOf("dang ky kenh") != -1 ||
         lowerT.indexOf("ghien mi go") != -1 || lowerT.indexOf("la la school") != -1 ||
         lowerT.indexOf("like va share") != -1 || lowerT.indexOf("cam on da xem") != -1 ||
@@ -404,6 +472,7 @@ void processAudioAI(uint8_t* audioData, size_t size) {
         lowerT.indexOf("theo doi kenh") != -1 || lowerT.indexOf("nho like") != -1 ||
         lowerT.indexOf("chia se video") != -1 || lowerT.indexOf("chuc cac ban") != -1 ||
         lowerT.indexOf("thank you") != -1 || lowerT.indexOf("watching") != -1 ||
+        lowerT.indexOf("subtitles by") != -1 || lowerT.indexOf("amara.org") != -1 ||
         lowerT == "bye" || lowerT == "tam biet" || lowerT == ".") {
       Serial.println("⚠️ [Whisper Filter] Đã lọc bỏ ảo giác YouTube từ tiếng ồn nền: " + transcribedText);
       isAiBusy = false;
@@ -428,15 +497,29 @@ void processAudioAI(uint8_t* audioData, size_t size) {
     cleanTrans.trim();
     while (cleanTrans.indexOf("  ") != -1) cleanTrans.replace("  ", " ");
     
-    if (cleanTrans == "cho anh hai nori" || cleanTrans == "cho em hai nori" || 
-        cleanTrans == "cho toi hai nori" || cleanTrans == "cho minh hai nori" ||
-        cleanTrans == "cho anh hi nori" || cleanTrans == "cho em hi nori" ||
-        cleanTrans == "hai nori" || cleanTrans == "2 nori" || cleanTrans == "bay nori" ||
-        cleanTrans == "hay nori" || cleanTrans == "he nori" || cleanTrans == "ha nori" ||
-        cleanTrans == "day nori" || cleanTrans == "lay nori" || cleanTrans == "oi nori" ||
-        cleanTrans == "hai no ri" || cleanTrans == "hai nory" || cleanTrans == "hi nori") {
-      transcribedText = "Hi Nori";
-      lowerT = "hi nori";
+    // Bảng các biến thể phát âm mà Whisper tiếng Việt hay nghe nhầm từ "Hi Nori" / "Hey Nori"
+    const char* misheardWakePrefixes[] = {
+      "thay nua roi", "thay no roi", "thay no di", "thay nori", "thay no ri",
+      "hay nua roi", "say nua roi", "ai nua roi", "het nua roi",
+      "cho anh hai nori", "cho em hai nori", "cho toi hai nori", "cho minh hai nori",
+      "cho anh hi nori", "cho em hi nori", "cho anh nori", "cho em nori",
+      "hai nori", "2 nori", "bay nori", "hay nori", "he nori", "ha nori",
+      "day nori", "lay nori", "oi nori", "hai no ri", "hai nory", "hi nori",
+      "bai nori", "bye nori", "bai no ri", "nori", "no ri", "nori oi", "no ri oi",
+      "chao nori", "xin chao nori", "hello nori", "hey nori", "e nori", "alo nori",
+      "hi no ri", "hi no di", "hen nori", "hen no ri", "hien nori", "hoi nori", "thoi nori"
+    };
+
+    for (const char* mis : misheardWakePrefixes) {
+      if (cleanTrans == mis) {
+        transcribedText = "Hi Nori";
+        lowerT = "hi nori";
+        break;
+      } else if (cleanTrans.startsWith(String(mis) + " ")) {
+        transcribedText = "Hi Nori, " + transcribedText.substring(strlen(mis));
+        lowerT = "hi nori " + lowerT.substring(strlen(mis));
+        break;
+      }
     }
 
     // 🛑 QUY TẮC BẮT BUỘC WAKE-WORD: NẾU GỌI BẰNG GIỌNG NÓI (KHÔNG PHẢI BẤM NÚT THỦ CÔNG)
@@ -447,15 +530,12 @@ void processAudioAI(uint8_t* audioData, size_t size) {
                           lowerT.indexOf("nory") != -1 || lowerT.indexOf("lo ri") != -1 ||
                           lowerT.indexOf("noly") != -1 || lowerT.indexOf("nuri") != -1);
       if (!hasWakeWord) {
-        Serial.printf("⚠️ [Wake-Word Filter] Âm thanh không chứa từ khóa 'Hi Nori'/'Nori' (Nhận diện: \"%s\"). Bỏ qua 100%%!\n", transcribedText.c_str());
+        Serial.printf("⚠️ [Wake-Word Filter] Âm thanh từ TV/YouTube/tiếng ồn không gọi 'Hi Nori' (Nhận diện: \"%s\"). Bỏ qua 100%%!\n", transcribedText.c_str());
         isAiBusy = false;
         extern unsigned long lastWakeWordCheckFail;
         lastWakeWordCheckFail = millis();
         setAIFaceState(AI_STATE_IDLE);
         setLedMode(0);
-        extern void setAIChatDialogue(String userText, String aiText);
-        setAIChatDialogue("", "San sang...");
-        uiUpdatePending = true;
         return;
       }
       Serial.printf("✨ [Wake-Word Match] Đã nhận diện chính xác từ khóa Wake-Word: \"%s\"\n", transcribedText.c_str());
@@ -578,10 +658,18 @@ String searchMusicUrl(String songTitle) {
   return streamUrl;
 }
 
+// ============================================================================
+// --- GỬI PROMPT SANG GROQ LLM (LLAMA-3.3-70B-VERSATILE / COMPOUND-MINI) ---
+// ============================================================================
 void sendToLLM(String userText, bool isSilent) {
-  Serial.println("🧠 Đang gọi Groq LLM (Llama 3)...");
-  if (!isSilent) setAIFaceState(AI_STATE_THINKING);
+  isAiBusy = true;
+  userText.trim();
   
+  if (userText.length() == 0) {
+    isAiBusy = false;
+    return;
+  }
+
   extern String removeVietnameseAccents(String text);
   String lowerText = removeVietnameseAccents(userText);
   lowerText.toLowerCase();
@@ -623,6 +711,8 @@ void sendToLLM(String userText, bool isSilent) {
       normalizedGreeting == "hay nori" || normalizedGreeting == "hay nori." || normalizedGreeting == "hay" ||
       normalizedGreeting == "ha nori" || normalizedGreeting == "he nori" || normalizedGreeting == "hoi nori" ||
       normalizedGreeting == "lay nori" || normalizedGreeting == "day nori" ||
+      normalizedGreeting == "thay nua roi" || normalizedGreeting == "thay no roi" || normalizedGreeting == "thay nori" ||
+      normalizedGreeting == "hay nua roi" || normalizedGreeting == "say nua roi" || normalizedGreeting == "ai nua roi" ||
       normalizedGreeting == "hey nori." || normalizedGreeting == "hi nori.") {
     normalizedGreeting = "hi nori";
   }
@@ -630,7 +720,7 @@ void sendToLLM(String userText, bool isSilent) {
   // 🛑 KIỂM TRA Ý ĐỊNH ĐIỀU KHIỂN / CÂU HỎI KIẾN THỨC
   // Nếu câu nói có chứa bất kỳ từ khóa ra lệnh hoặc câu hỏi nào thì TUYỆT ĐỐI KHÔNG coi là chào hỏi đơn thuần!
   bool hasCommandIntent = (
-    cleanText.indexOf("nhac") != -1 || cleanText.indexOf("bai hat") != -1 || cleanText.indexOf("ca khuc") != -1 || cleanText.indexOf("bai") != -1 ||
+    cleanText.indexOf("nhac") != -1 || cleanText.indexOf("bai hat") != -1 || cleanText.indexOf("ca khuc") != -1 || cleanText.indexOf("bai nhac") != -1 ||
     cleanText.indexOf("den") != -1 || cleanText.indexOf("relay") != -1 || cleanText.indexOf("khoa") != -1 || cleanText.indexOf("cua") != -1 ||
     cleanText.indexOf("quat") != -1 || cleanText.indexOf("dieu hoa") != -1 || cleanText.indexOf("may lanh") != -1 ||
     cleanText.indexOf("nhiet do") != -1 || cleanText.indexOf("do am") != -1 || cleanText.indexOf("ap suat") != -1 ||
@@ -639,6 +729,8 @@ void sendToLLM(String userText, bool isSilent) {
     cleanText.indexOf("loa") != -1 || cleanText.indexOf("do sang") != -1 || cleanText.indexOf("sang") != -1 ||
     cleanText.indexOf("bat") != -1 || cleanText.indexOf("tat") != -1 || cleanText.indexOf("mo") != -1 || cleanText.indexOf("dong") != -1 ||
     cleanText.indexOf("tang") != -1 || cleanText.indexOf("giam") != -1 || cleanText.indexOf("dung") != -1 || cleanText.indexOf("ngung") != -1 ||
+    cleanText.indexOf("man hinh") != -1 || cleanText.indexOf("tro ve") != -1 || cleanText.indexOf("quay ve") != -1 || cleanText.indexOf("quay lai") != -1 ||
+    cleanText.indexOf("dashboard") != -1 || cleanText.indexOf("trang chu") != -1 || cleanText.indexOf("thoat") != -1 || cleanText.indexOf("remote") != -1 ||
     cleanText.indexOf("la gi") != -1 || cleanText.indexOf("the nao") != -1 || cleanText.indexOf("nhu the nao") != -1 || cleanText.indexOf("tai sao") != -1 ||
     cleanText.indexOf("ai la") != -1 || cleanText.indexOf("o dau") != -1 || cleanText.indexOf("bao nhieu") != -1 || cleanText.indexOf("khi nao") != -1 ||
     cleanText.indexOf("huong dan") != -1 || cleanText.indexOf("giai thich") != -1 || cleanText.indexOf("nghe") != -1 || cleanText.indexOf("hat") != -1 ||
@@ -655,7 +747,7 @@ void sendToLLM(String userText, bool isSilent) {
     normalizedGreeting == "hi" || normalizedGreeting == "hello nori" || normalizedGreeting == "xin chao nori" || 
     normalizedGreeting == "nori" || normalizedGreeting == "no ri" || normalizedGreeting == "no ri oi" || 
     normalizedGreeting == "chao nori nha" || normalizedGreeting == "hi nori nha" || normalizedGreeting == "oi nori" || 
-    normalizedGreeting == "e nori" ||
+    normalizedGreeting == "e nori" || normalizedGreeting == "bai nori" || normalizedGreeting == "bye nori" ||
     ((normalizedGreeting.indexOf("chao nori") != -1 || normalizedGreeting.indexOf("hi nori") != -1 || 
       normalizedGreeting.indexOf("hello nori") != -1 || normalizedGreeting.indexOf("nori oi") != -1 || 
       normalizedGreeting.indexOf("xin chao nori") != -1) && normalizedGreeting.length() <= 15)
@@ -717,79 +809,102 @@ void sendToLLM(String userText, bool isSilent) {
 
   bool isPlayMusic = (
     lowerText.indexOf("bai hat") != -1 || lowerText.indexOf("ca khuc") != -1 || lowerText.indexOf("bai nhac") != -1 ||
-    lowerText.indexOf("mo bai") != -1 || lowerText.indexOf("bat bai") != -1 || lowerText.indexOf("phat bai") != -1 ||
-    lowerText.indexOf("hat bai") != -1 || lowerText.indexOf("nghe bai") != -1 || lowerText.indexOf("tim bai") != -1 ||
+    lowerText.indexOf("mo bai ") != -1 || lowerText.indexOf("bat bai ") != -1 || lowerText.indexOf("phat bai ") != -1 ||
+    lowerText.indexOf("hat bai ") != -1 || lowerText.indexOf("nghe bai ") != -1 || lowerText.indexOf("tim bai ") != -1 ||
     lowerText.indexOf("mo nhac") != -1 || lowerText.indexOf("bat nhac") != -1 || lowerText.indexOf("phat nhac") != -1 ||
     lowerText.indexOf("nghe nhac") != -1 || lowerText.indexOf("hat nhac") != -1 || lowerText.indexOf("tim nhac") != -1 ||
-    lowerText.indexOf("cho toi nghe") != -1 || lowerText.indexOf("cho minh nghe") != -1 || lowerText.indexOf("cho nghe") != -1 ||
-    lowerText.indexOf("mo cho toi") != -1 || lowerText.indexOf("mo cho minh") != -1 || lowerText.indexOf("mo giup") != -1 || lowerText.indexOf("mo ho") != -1 ||
-    lowerText.indexOf("bat cho toi") != -1 || lowerText.indexOf("bat cho minh") != -1 || lowerText.indexOf("bat giup") != -1 || lowerText.indexOf("bat ho") != -1 ||
-    lowerText.indexOf("phat cho toi") != -1 || lowerText.indexOf("phat cho minh") != -1 || lowerText.indexOf("phat giup") != -1 || lowerText.indexOf("phat ho") != -1 ||
-    lowerText.indexOf("muon nghe") != -1 || lowerText.indexOf("muon bat") != -1 || lowerText.indexOf("muon mo") != -1 || lowerText.indexOf("muon phat") != -1 ||
-    lowerText.indexOf("toi nghe nhac") != -1 || lowerText.indexOf("toi muon nghe nhac") != -1 ||
-    lowerText.startsWith("play ") || lowerText.startsWith("nhac ") || lowerText.startsWith("bai ") ||
     ((lowerText.indexOf("mo ") != -1 || lowerText.indexOf("bat ") != -1 || lowerText.indexOf("phat ") != -1) && (lowerText.indexOf(" bai ") != -1 || lowerText.indexOf(" nhac ") != -1))
   );
 
   if (isPlayMusic) {
     String songQuery = "";
-    String cleanedSong = lowerText;
-    cleanedSong.replace("mo giup toi", "");
-    cleanedSong.replace("bat giup toi", "");
-    cleanedSong.replace("phat giup toi", "");
-    cleanedSong.replace("mo ho toi", "");
-    cleanedSong.replace("bat ho toi", "");
-    cleanedSong.replace("phat ho toi", "");
-    cleanedSong.replace("mo cho toi", "");
-    cleanedSong.replace("bat cho toi", "");
-    cleanedSong.replace("phat cho toi", "");
-    cleanedSong.replace("mo cho minh", "");
-    cleanedSong.replace("bat cho minh", "");
-    cleanedSong.replace("phat cho minh", "");
-    cleanedSong.replace("cho toi nghe bai", "");
-    cleanedSong.replace("cho minh nghe bai", "");
-    cleanedSong.replace("cho toi nghe", "");
-    cleanedSong.replace("cho minh nghe", "");
-    cleanedSong.replace("cho nghe bai", "");
-    cleanedSong.replace("cho nghe", "");
-    cleanedSong.replace("toi muon nghe bai", "");
-    cleanedSong.replace("toi muon nghe", "");
-    cleanedSong.replace("toi muon mo", "");
-    cleanedSong.replace("toi muon bat", "");
-    cleanedSong.replace("toi muon phat", "");
-    cleanedSong.replace("toi nghe nhac", "");
-    cleanedSong.replace("toi nghe bai", "");
-    cleanedSong.replace("muon nghe bai", "");
-    cleanedSong.replace("muon nghe", "");
-    cleanedSong.replace("muon mo", "");
-    cleanedSong.replace("muon bat", "");
-    cleanedSong.replace("muon phat", "");
-    cleanedSong.replace("phat bai nhac", "");
-    cleanedSong.replace("bat bai nhac", "");
-    cleanedSong.replace("mo bai nhac", "");
-    cleanedSong.replace("phat bai hat", "");
-    cleanedSong.replace("bat bai hat", "");
-    cleanedSong.replace("mo bai hat", "");
-    cleanedSong.replace("hat bai hat", "");
-    cleanedSong.replace("nghe bai hat", "");
-    cleanedSong.replace("phat bai", "");
-    cleanedSong.replace("bat bai", "");
-    cleanedSong.replace("mo bai", "");
-    cleanedSong.replace("hat bai", "");
-    cleanedSong.replace("nghe bai", "");
-    cleanedSong.replace("phat nhac", "");
-    cleanedSong.replace("bat nhac", "");
-    cleanedSong.replace("mo nhac", "");
-    cleanedSong.replace("ca khuc", "");
-    cleanedSong.replace("bai hat", "");
-    cleanedSong.replace("bai nhac", "");
-    cleanedSong.replace("play music", "");
-    cleanedSong.replace("play ", "");
+    String s = lowerText;
+    s.trim();
+
+    // 1. Danh sách các cụm từ đệm dài đến ngắn
+    const char* prefixes[] = {
+      "hay mo giup toi bai hat", "hay mo giup toi bai nhac", "hay mo giup toi ca khuc", "hay mo giup toi bai", "hay mo giup toi",
+      "mo giup toi bai hat", "mo giup toi bai nhac", "mo giup toi ca khuc", "mo giup toi bai", "mo giup toi",
+      "bat giup toi bai hat", "bat giup toi bai nhac", "bat giup toi ca khuc", "bat giup toi bai", "bat giup toi",
+      "phat giup toi bai hat", "phat giup toi bai nhac", "phat giup toi ca khuc", "phat giup toi bai", "phat giup toi",
+      "mo cho toi nghe bai hat", "mo cho toi nghe bai nhac", "mo cho toi nghe ca khuc", "mo cho toi nghe bai", "mo cho toi nghe",
+      "mo cho minh nghe bai hat", "mo cho minh nghe bai nhac", "mo cho minh nghe ca khuc", "mo cho minh nghe bai", "mo cho minh nghe",
+      "mo cho toa bai hat", "mo cho toa bai nhac", "mo cho toa ca khuc", "mo cho toa bai", "mo cho toa",
+      "mo cho to bai hat", "mo cho to bai nhac", "mo cho to ca khuc", "mo cho to bai", "mo cho to",
+      "mo cho tao bai hat", "mo cho tao bai nhac", "mo cho tao ca khuc", "mo cho tao bai", "mo cho tao",
+      "mo cho ta bai hat", "mo cho ta bai nhac", "mo cho ta ca khuc", "mo cho ta bai", "mo cho ta",
+      "mo cho toi bai hat", "mo cho toi bai nhac", "mo cho toi ca khuc", "mo cho toi bai", "mo cho toi",
+      "mo cho minh bai hat", "mo cho minh bai nhac", "mo cho minh ca khuc", "mo cho minh bai", "mo cho minh",
+      "bat cho toa bai", "bat cho to bai", "bat cho toi bai", "bat cho minh bai", "bat cho tao bai",
+      "phat cho toa bai", "phat cho to bai", "phat cho toi bai", "phat cho minh bai", "phat cho tao bai",
+      "cho toa nghe bai", "cho to nghe bai", "cho toi nghe bai", "cho minh nghe bai", "cho tao nghe bai",
+      "cho toa bai", "cho to bai", "cho toi bai", "cho minh bai", "cho tao bai",
+      "cho toa", "cho to", "cho toi", "cho minh", "cho tao", "cho ta",
+      "toi muon nghe bai hat", "toi muon nghe bai nhac", "toi muon nghe ca khuc", "toi muon nghe bai", "toi muon nghe",
+      "minh muon nghe bai hat", "minh muon nghe bai nhac", "minh muon nghe ca khuc", "minh muon nghe bai", "minh muon nghe",
+      "toi muon mo bai", "toi muon bat bai", "toi muon phat bai", "toi muon mo", "toi muon bat", "toi muon phat",
+      "muon nghe bai hat", "muon nghe bai nhac", "muon nghe ca khuc", "muon nghe bai", "muon nghe",
+      "muon mo bai", "muon bat bai", "muon phat bai", "muon mo", "muon bat", "muon phat",
+      "phat bai nhac", "bat bai nhac", "mo bai nhac", "hat bai nhac", "nghe bai nhac",
+      "phat bai hat", "bat bai hat", "mo bai hat", "hat bai hat", "nghe bai hat",
+      "phat ca khuc", "bat ca khuc", "mo ca khuc", "hat ca khuc", "nghe ca khuc",
+      "mot bai nhac", "mot bai hat", "mot ca khuc", "mot khuc nhac", "mot bai",
+      "phat bai", "bat bai", "mo bai", "hat bai", "nghe bai", "tim bai",
+      "phat nhac", "bat nhac", "mo nhac", "hat nhac", "nghe nhac", "tim nhac",
+      "ca khuc", "bai hat", "bai nhac", "khuc nhac",
+      "play music", "play song", "play "
+    };
+
+    for (const char* prefix : prefixes) {
+      if (s.startsWith(prefix)) {
+        s = s.substring(strlen(prefix));
+        s.trim();
+      }
+    }
+
+    // 2. Vòng lặp bóc tách từng từ đệm ở đầu chuỗi (xử lý triệt để "mo", "cho", "toa", "to", "bai", "mot"...)
+    bool changed = true;
+    while (changed) {
+      changed = false;
+      if (s.startsWith("hay ") || s.startsWith("mo ") || s.startsWith("bat ") || s.startsWith("phat ") || s.startsWith("nghe ") || s.startsWith("hat ") || s.startsWith("tim ")) {
+        s = s.substring(s.indexOf(' ') + 1);
+        s.trim();
+        changed = true;
+      }
+      if (s.startsWith("cho ") || s.startsWith("giup ") || s.startsWith("ho ") || s.startsWith("voi ")) {
+        s = s.substring(s.indexOf(' ') + 1);
+        s.trim();
+        changed = true;
+      }
+      if (s.startsWith("toi ") || s.startsWith("to ") || s.startsWith("toa ") || s.startsWith("tao ") || s.startsWith("minh ") || s.startsWith("em ") || s.startsWith("anh ") || s.startsWith("ta ") || s.startsWith("ban ")) {
+        s = s.substring(s.indexOf(' ') + 1);
+        s.trim();
+        changed = true;
+      }
+      if (s.startsWith("nghe ") || s.startsWith("xem ")) {
+        s = s.substring(s.indexOf(' ') + 1);
+        s.trim();
+        changed = true;
+      }
+      if (s.startsWith("mot ") || s.startsWith("vai ") || s.startsWith("bai ") || s.startsWith("ca khuc ") || s.startsWith("nhac ") || s.startsWith("khuc ")) {
+        s = s.substring(s.indexOf(' ') + 1);
+        s.trim();
+        changed = true;
+      }
+    }
+
+    // 3. Lọc từ đuôi câu thoại
+    if (s.endsWith(" nhe")) s = s.substring(0, s.length() - 4);
+    else if (s.endsWith(" nha")) s = s.substring(0, s.length() - 4);
+    else if (s.endsWith(" di")) s = s.substring(0, s.length() - 3);
+    else if (s.endsWith(" voi")) s = s.substring(0, s.length() - 4);
+    else if (s.endsWith(" a")) s = s.substring(0, s.length() - 2);
+    s.trim();
+
+    String cleanedSong = s;
     cleanedSong.replace(" cua ", " ");
     cleanedSong.replace(" do ", " ");
     cleanedSong.replace(" boi ", " ");
-    cleanedSong.replace("hat di", "");
-    cleanedSong.replace("nghe di", "");
     
     // Tự động sửa các lỗi phát âm / phiên âm tiếng Anh phổ biến
     cleanedSong.replace("bay bay justin", "Baby Justin Bieber");
@@ -806,10 +921,137 @@ void sendToLLM(String userText, bool isSilent) {
     }
     cleanedSong.trim();
 
-    if (cleanedSong.length() > 0 && cleanedSong != "nhac" && cleanedSong != "bai" && cleanedSong != "hat" && cleanedSong != "nghe") {
-      songQuery = cleanedSong;
+    bool isRandomMusic = false;
+    if (cleanedSong.length() == 0 || 
+        cleanedSong == "nhac" || cleanedSong == "bai" || cleanedSong == "hat" || cleanedSong == "nghe" || 
+        cleanedSong == "mot" || cleanedSong == "mot bai" || cleanedSong == "random" || cleanedSong == "ngau nhien" ||
+        cleanedSong == "gi do" || cleanedSong == "nao do" || cleanedSong == "hay" || cleanedSong == "lofi" ||
+        lowerText.indexOf("mot bai nhac") != -1 || lowerText.indexOf("mot bai hat") != -1 ||
+        lowerText.indexOf("bai gi do") != -1 || lowerText.indexOf("ngau nhien") != -1 || lowerText.indexOf("random") != -1) {
+      isRandomMusic = true;
+    }
+
+    // 4. Trích xuất tên bài hát giữ nguyên 100% TIẾNG VIỆT CÓ DẤU từ userText gốc
+    String rawSongQuery = userText;
+    rawSongQuery.trim();
+
+    const char* rawPrefixes[] = {
+      "Hãy mở giúp tôi bài hát", "Hãy mở giúp tôi bài nhạc", "Hãy mở giúp tôi ca khúc", "Hãy mở giúp tôi bài", "Hãy mở giúp tôi",
+      "hãy mở giúp tôi bài hát", "hãy mở giúp tôi bài nhạc", "hãy mở giúp tôi ca khúc", "hãy mở giúp tôi bài", "hãy mở giúp tôi",
+      "Mở giúp tôi bài hát", "Mở giúp tôi bài nhạc", "Mở giúp tôi ca khúc", "Mở giúp tôi bài", "Mở giúp tôi",
+      "mở giúp tôi bài hát", "mở giúp tôi bài nhạc", "mở giúp tôi ca khúc", "mở giúp tôi bài", "mở giúp tôi",
+      "Bật giúp tôi bài hát", "Bật giúp tôi bài nhạc", "Bật giúp tôi ca khúc", "Bật giúp tôi bài", "Bật giúp tôi",
+      "bật giúp tôi bài hát", "bật giúp tôi bài nhạc", "bật giúp tôi ca khúc", "bật giúp tôi bài", "bật giúp tôi",
+      "Phát giúp tôi bài hát", "Phát giúp tôi bài nhạc", "Phát giúp tôi ca khúc", "Phát giúp tôi bài", "Phát giúp tôi",
+      "phát giúp tôi bài hát", "phát giúp tôi bài nhạc", "phát giúp tôi ca khúc", "phát giúp tôi bài", "phát giúp tôi",
+      "Mở cho tôi nghe bài hát", "Mở cho tôi nghe bài nhạc", "Mở cho tôi nghe ca khúc", "Mở cho tôi nghe bài", "Mở cho tôi nghe",
+      "mở cho tôi nghe bài hát", "mở cho tôi nghe bài nhạc", "mở cho tôi nghe ca khúc", "mở cho tôi nghe bài", "mở cho tôi nghe",
+      "Mở cho mình nghe bài hát", "Mở cho mình nghe bài nhạc", "Mở cho mình nghe ca khúc", "Mở cho mình nghe bài", "Mở cho mình nghe",
+      "mở cho mình nghe bài hát", "mở cho mình nghe bài nhạc", "mở cho mình nghe ca khúc", "mở cho mình nghe bài", "mở cho mình nghe",
+      "Mở cho toa bài hát", "Mở cho toa bài nhạc", "Mở cho toa ca khúc", "Mở cho toa bài", "Mở cho toa",
+      "mở cho toa bài hát", "mở cho toa bài nhạc", "mở cho toa ca khúc", "mở cho toa bài", "mở cho toa",
+      "Mở cho to bài hát", "Mở cho to bài nhạc", "Mở cho to ca khúc", "Mở cho to bài", "Mở cho to",
+      "mở cho to bài hát", "mở cho to bài nhạc", "mở cho to ca khúc", "mở cho to bài", "mở cho to",
+      "Mở cho tôi bài hát", "Mở cho tôi bài nhạc", "Mở cho tôi ca khúc", "Mở cho tôi bài", "Mở cho tôi",
+      "mở cho tôi bài hát", "mở cho tôi bài nhạc", "mở cho tôi ca khúc", "mở cho tôi bài", "mở cho tôi",
+      "Mở cho mình bài hát", "Mở cho mình bài nhạc", "Mở cho mình ca khúc", "Mở cho mình bài", "Mở cho mình",
+      "mở cho mình bài hát", "mở cho mình bài nhạc", "mở cho mình ca khúc", "mở cho mình bài", "mở cho mình",
+      "Bật cho tôi bài", "bật cho tôi bài", "Bật cho mình bài", "bật cho mình bài",
+      "Phát cho tôi bài", "phát cho tôi bài", "Phát cho mình bài", "phát cho mình bài",
+      "Cho tôi nghe bài", "cho tôi nghe bài", "Cho mình nghe bài", "cho mình nghe bài",
+      "Cho tôi bài", "cho tôi bài", "Cho mình bài", "cho mình bài",
+      "Cho tôi", "cho tôi", "Cho mình", "cho mình",
+      "Tôi muốn nghe bài hát", "tôi muốn nghe bài hát", "Tôi muốn nghe bài", "tôi muốn nghe bài", "Tôi muốn nghe", "tôi muốn nghe",
+      "Mình muốn nghe bài hát", "mình muốn nghe bài hát", "Mình muốn nghe bài", "mình muốn nghe bài", "Mình muốn nghe", "mình muốn nghe",
+      "Tôi muốn mở bài", "tôi muốn mở bài", "Tôi muốn bật bài", "tôi muốn bật bài", "Tôi muốn phát bài", "tôi muốn phát bài",
+      "Tôi muốn mở", "tôi muốn mở", "Tôi muốn bật", "tôi muốn bật", "Tôi muốn phát", "tôi muốn phát",
+      "Muốn nghe bài hát", "muốn nghe bài hát", "Muốn nghe bài", "muốn nghe bài", "Muốn nghe", "muốn nghe",
+      "Muốn mở bài", "muốn mở bài", "Muốn bật bài", "muốn bật bài", "Muốn phát bài", "muốn phát bài",
+      "Phát bài nhạc", "phát bài nhạc", "Bật bài nhạc", "bật bài nhạc", "Mở bài nhạc", "mở bài nhạc",
+      "Phát bài hát", "phát bài hát", "Bật bài hát", "bật bài hát", "Mở bài hát", "mở bài hát",
+      "Phát ca khúc", "phát ca khúc", "Bật ca khúc", "bật ca khúc", "Mở ca khúc", "mở ca khúc",
+      "Một bài nhạc", "một bài nhạc", "Một bài hát", "một bài hát", "Một ca khúc", "một ca khúc", "Một bài", "một bài",
+      "Phát bài", "phát bài", "Bật bài", "bật bài", "Mở bài", "mở bài", "Hát bài", "hát bài", "Nghe bài", "nghe bài", "Tìm bài", "tìm bài",
+      "Phát nhạc", "phát nhạc", "Bật nhạc", "bật nhạc", "Mở nhạc", "mở nhạc", "Hát nhạc", "hát nhạc", "Nghe nhạc", "nghe nhạc", "Tìm nhạc", "tìm nhạc",
+      "Ca khúc", "ca khúc", "Bài hát", "bài hát", "Bài nhạc", "bài nhạc", "Khúc nhạc", "khúc nhạc",
+      "Play music", "play music", "Play song", "play song", "Play ", "play "
+    };
+
+    for (const char* prefix : rawPrefixes) {
+      if (rawSongQuery.startsWith(prefix)) {
+        rawSongQuery = rawSongQuery.substring(strlen(prefix));
+        rawSongQuery.trim();
+      }
+    }
+
+    // Bóc tách các từ đệm có dấu còn sót lại ở đầu chuỗi
+    bool rawChanged = true;
+    while (rawChanged) {
+      rawChanged = false;
+      String lowerRaw = removeVietnameseAccents(rawSongQuery);
+      lowerRaw.toLowerCase();
+      if (lowerRaw.startsWith("hay ") || lowerRaw.startsWith("mo ") || lowerRaw.startsWith("bat ") || 
+          lowerRaw.startsWith("phat ") || lowerRaw.startsWith("nghe ") || lowerRaw.startsWith("hat ") || lowerRaw.startsWith("tim ")) {
+        int sp = rawSongQuery.indexOf(' ');
+        if (sp != -1) {
+          rawSongQuery = rawSongQuery.substring(sp + 1);
+          rawSongQuery.trim();
+          rawChanged = true;
+        }
+      }
+      else if (lowerRaw.startsWith("cho ") || lowerRaw.startsWith("giup ") || lowerRaw.startsWith("ho ") || lowerRaw.startsWith("voi ")) {
+        int sp = rawSongQuery.indexOf(' ');
+        if (sp != -1) {
+          rawSongQuery = rawSongQuery.substring(sp + 1);
+          rawSongQuery.trim();
+          rawChanged = true;
+        }
+      }
+      else if (lowerRaw.startsWith("toi ") || lowerRaw.startsWith("to ") || lowerRaw.startsWith("toa ") || lowerRaw.startsWith("tao ") || 
+               lowerRaw.startsWith("minh ") || lowerRaw.startsWith("em ") || lowerRaw.startsWith("anh ") || lowerRaw.startsWith("ta ") || lowerRaw.startsWith("ban ")) {
+        int sp = rawSongQuery.indexOf(' ');
+        if (sp != -1) {
+          rawSongQuery = rawSongQuery.substring(sp + 1);
+          rawSongQuery.trim();
+          rawChanged = true;
+        }
+      }
+      else if (lowerRaw.startsWith("nghe ") || lowerRaw.startsWith("xem ")) {
+        int sp = rawSongQuery.indexOf(' ');
+        if (sp != -1) {
+          rawSongQuery = rawSongQuery.substring(sp + 1);
+          rawSongQuery.trim();
+          rawChanged = true;
+        }
+      }
+      else if (lowerRaw.startsWith("mot ") || lowerRaw.startsWith("vai ") || lowerRaw.startsWith("bai ") || 
+               lowerRaw.startsWith("ca khuc ") || lowerRaw.startsWith("nhac ") || lowerRaw.startsWith("khuc ")) {
+        int sp = rawSongQuery.indexOf(' ');
+        if (sp != -1) {
+          rawSongQuery = rawSongQuery.substring(sp + 1);
+          rawSongQuery.trim();
+          rawChanged = true;
+        }
+      }
+    }
+
+    // Lọc đuôi câu thoại có dấu
+    String lowerCheck = removeVietnameseAccents(rawSongQuery);
+    lowerCheck.toLowerCase();
+    if (lowerCheck.endsWith(" nhe") || lowerCheck.endsWith(" nha") || lowerCheck.endsWith(" voi")) {
+      int sp = rawSongQuery.lastIndexOf(' ');
+      if (sp != -1) rawSongQuery = rawSongQuery.substring(0, sp);
+    } else if (lowerCheck.endsWith(" di") || lowerCheck.endsWith(" a")) {
+      int sp = rawSongQuery.lastIndexOf(' ');
+      if (sp != -1) rawSongQuery = rawSongQuery.substring(0, sp);
+    }
+    rawSongQuery.trim();
+
+    if (!isRandomMusic && rawSongQuery.length() > 1) {
+      songQuery = rawSongQuery;
     } else {
-      // Khi người dùng chỉ nói chung chung "mở nhạc", "tôi nghe nhạc", "phát nhạc"
+      // Khi người dùng chỉ nói chung chung "mở giúp tôi một bài nhạc", "mở nhạc", "tôi nghe nhạc", "phát nhạc ngẫu nhiên"
+      isRandomMusic = true;
       const char* hotHits[] = {
         "Lạc Trôi",
         "Âm Thầm Bên Em",
@@ -818,28 +1060,63 @@ void sendToLLM(String userText, bool isSilent) {
         "Nơi Này Có Anh",
         "Shape of You",
         "See You Again",
-        "Nhạc Lofi chill"
+        "Tết Ơi Tết À",
+        "Nhạc Lofi chill",
+        "Ngày Đầu Tiên"
       };
-      songQuery = hotHits[random(0, 8)];
+      songQuery = hotHits[random(0, 10)];
     }
 
-    Serial.println("🎵 Nhận diện lệnh phát nhạc: " + songQuery);
+    Serial.println("🎵 Nhận diện lệnh phát nhạc: " + songQuery + (isRandomMusic ? " (Random Mode)" : " (Specific Song)"));
     extern String pendingSongTitle;
     extern bool isMusicMode;
     pendingSongTitle = songQuery;
     isMusicMode = true;
     if (!isSilent) {
-      playTTS("Dạ em đang tìm và phát bài " + songQuery + " cho bạn thưởng thức đây nè!");
+      if (isRandomMusic) {
+        playTTS("Dạ để em tìm một bài nhạc random thật hay cho bạn thưởng thức nhé!");
+      } else {
+        playTTS("Dạ em đang tìm và phát bài " + songQuery + " cho bạn thưởng thức đây nè!");
+      }
+    }
+    return;
+  }
+
+  // --- FAST-PATH KẾT THÚC HỘI THOẠI LỊCH SỰ (CẢM ƠN, TẠM BIỆT, THÔI...) ---
+  bool isGoodbye = (
+    lowerText == "cam on" || lowerText == "cam on em" || lowerText == "cam on ban" || lowerText == "cam on nha" || 
+    lowerText == "thank you" || lowerText == "thanks" || lowerText == "tam biet" || lowerText == "bye" || lowerText == "bye bye" || 
+    lowerText == "chao nhe" || lowerText == "thoi" || lowerText == "thoi duoc roi" || lowerText == "duoc roi" || 
+    lowerText == "xong roi" || lowerText == "khong can nua" || lowerText == "khong co gi"
+  );
+  if (isGoodbye) {
+    pendingReturnToMain = true; // Kết thúc và chuyển về màn hình chính sau khi chào
+    if (lowerText.indexOf("cam on") != -1 || lowerText.indexOf("thank") != -1) {
+      if (!isSilent) playTTS("Dạ không có gì ạ! Cần gì bạn cứ gọi em nhé!");
+    } else {
+      if (!isSilent) playTTS("Dạ tạm biệt bạn nha! Chúc bạn một ngày vui vẻ!");
     }
     return;
   }
   
-  // --- FAST-PATH ĐIỀU HƯỚNG MÀN HÌNH (TRỞ VỀ / MỞ REMOTE) ---
-  if (lowerText == "tro ve" || lowerText == "quay ve" || lowerText == "ve man hinh chinh" || 
-      lowerText == "tro ve man hinh chinh" || lowerText == "man hinh chinh" || lowerText == "ve dashboard" ||
-      lowerText == "dong ai" || lowerText.indexOf("ve man hinh") != -1 || lowerText.indexOf("tro ve man hinh") != -1 ||
-      lowerText.indexOf("cho ve") != -1 || lowerText.indexOf("hanh tranh") != -1 || lowerText.indexOf("man hinh") != -1 ||
-      lowerText.indexOf("quay ve") != -1 || lowerText.indexOf("tro ve") != -1) {
+  // --- FAST-PATH ĐIỀU HƯỚNG MÀN HÌNH (TRỞ VỀ MÀN HÌNH CHÍNH / MỞ REMOTE) ---
+  bool isGotoMainScreen = (
+    lowerText == "tro ve" || lowerText == "quay ve" || lowerText == "ve man hinh chinh" || 
+    lowerText == "tro ve man hinh chinh" || lowerText == "quay ve man hinh chinh" || lowerText == "chuyen ve man hinh chinh" ||
+    lowerText == "ve man hinh" || lowerText == "tro ve man hinh" || lowerText == "quay ve man hinh" ||
+    lowerText == "man hinh chinh" || lowerText == "ve dashboard" || lowerText == "dashboard" ||
+    lowerText == "ve trang chu" || lowerText == "trang chu" || lowerText == "quay lai" ||
+    lowerText == "dong ai" || lowerText == "tat ai" || lowerText == "thoat ai" || lowerText == "thoat" ||
+    lowerText.indexOf("ve man hinh chinh") != -1 || lowerText.indexOf("tro ve man hinh") != -1 ||
+    lowerText.indexOf("quay ve man hinh") != -1 || lowerText.indexOf("chuyen ve man hinh") != -1 ||
+    lowerText.indexOf("man hinh chinh") != -1 || lowerText.indexOf("ve man hinh") != -1 ||
+    lowerText.indexOf("dong ai") != -1 || lowerText.indexOf("thoat ai") != -1 ||
+    lowerText.indexOf("ve dashboard") != -1 || lowerText.indexOf("ve trang chu") != -1 ||
+    lowerText.indexOf("quay ve") != -1 || lowerText.indexOf("tro ve") != -1 ||
+    lowerText.indexOf("cho ve") != -1 || lowerText.indexOf("hanh tranh") != -1
+  );
+
+  if (isGotoMainScreen) {
     if (audio.isRunning()) audio.stopSong();
     isMusicMode = false;
     if (is_ir_learning_mode) {
@@ -847,11 +1124,17 @@ void sendToLLM(String userText, bool isSilent) {
       irrecv.disableIRIn();
     }
     stopMusicScreen();
-    showMainScreen();
-    setAIFaceState(AI_STATE_IDLE);
-    setLedMode(0);
-    uiUpdatePending = true;
-    if (!isSilent) playTTS("Đã trở về màn hình chính cho bạn rồi nhé!");
+    pendingReturnToMain = true; // 👉 ĐẶT CỜ TỰ ĐỘNG CHUYỂN VỀ MÀN HÌNH CHÍNH SAU KHI NÓI XONG
+    pendingReturnToRemote = false;
+    if (!isSilent) {
+      playTTS("Đã trở về màn hình chính cho bạn rồi nhé!");
+    } else {
+      pendingReturnToMain = false;
+      showMainScreen();
+      setAIFaceState(AI_STATE_IDLE);
+      setLedMode(0);
+      uiUpdatePending = true;
+    }
     return;
   } else if (lowerText == "mo remote" || lowerText == "bat remote" || lowerText == "mo dieu khien" || 
              lowerText == "hoc lenh" || lowerText == "che do hoc lenh" || lowerText == "man hinh remote" ||
@@ -860,10 +1143,16 @@ void sendToLLM(String userText, bool isSilent) {
     if (audio.isRunning()) audio.stopSong();
     is_ir_learning_mode = true;
     irrecv.enableIRIn();
-    showIrScreen();
-    updateIrScreen(selected_ir_idx, typeToString(learned_ir[selected_ir_idx].type), String((uint32_t)(learned_ir[selected_ir_idx].value & 0xFFFFFFFF), HEX));
-    uiUpdatePending = true;
-    if (!isSilent) playTTS("Đã mở màn hình điều khiển và chế độ học lệnh hồng ngoại rồi nè!");
+    pendingReturnToRemote = true; // 👉 ĐẶT CỜ TỰ ĐỘNG CHUYỂN VỀ REMOTE SAU KHI NÓI XONG
+    pendingReturnToMain = false;
+    if (!isSilent) {
+      playTTS("Đã mở màn hình điều khiển và chế độ học lệnh hồng ngoại rồi nè!");
+    } else {
+      pendingReturnToRemote = false;
+      showIrScreen();
+      updateIrScreen(selected_ir_idx, typeToString(learned_ir[selected_ir_idx].type), String((uint32_t)(learned_ir[selected_ir_idx].value & 0xFFFFFFFF), HEX));
+      uiUpdatePending = true;
+    }
     return;
   }
 
@@ -1038,26 +1327,6 @@ void sendToLLM(String userText, bool isSilent) {
   String emotionToSet = "";
 
   {
-    WiFiClientSecure client;
-    client.setInsecure();
-    client.setTimeout(12000);
-    client.setHandshakeTimeout(6);
-
-    Serial.println("🧠 Đang kết nối tới Groq LLM (api.groq.com:443)...");
-    bool connected = client.connect("api.groq.com", 443);
-    if (!connected) {
-      Serial.printf("⚠️ Thử kết nối lại tới Groq LLM (Free Heap: %u, Max Block: %u)...\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
-      vTaskDelay(pdMS_TO_TICKS(350));
-      connected = client.connect("api.groq.com", 443);
-    }
-
-    if (!connected) {
-      Serial.println("❌ Không thể kết nối tới api.groq.com:443!");
-      if (!isSilent) setAIFaceState(AI_STATE_IDLE);
-      isAiBusy = false;
-      return;
-    }
-
     extern String userName;
     extern int ledBrightness;
     extern uint8_t audioVolume;
@@ -1102,8 +1371,8 @@ void sendToLLM(String userText, bool isSilent) {
                           "Nếu bật điều hòa: chọn action: 'set_ac_on' kèm 'ac_temp' (16-30).";
 
     JsonDocument doc;
-    doc["model"] = "groq/compound-mini";
-    doc["max_tokens"] = 600;
+    doc["model"] = "openai/gpt-oss-20b"; // Model OpenAI chính thức trên Groq, siêu tốc 1000 token/s, không bị lỗi 429
+    doc["max_tokens"] = 500;
     doc["response_format"]["type"] = "json_object";
     
     JsonArray messages = doc["messages"].to<JsonArray>();
@@ -1115,8 +1384,9 @@ void sendToLLM(String userText, bool isSilent) {
     // Thêm câu hỏi hiện tại vào lịch sử
     if (!isSilent) addChatHistory("user", userText);
     
-    // Đẩy toàn bộ lịch sử vào mảng messages
-    for (int i = 0; i < historyCount; i++) {
+    // Đẩy lịch sử gần nhất vào mảng messages (tối đa 4 lượt để không tràn TPM)
+    int startHist = max(0, historyCount - 4);
+    for (int i = startHist; i < historyCount; i++) {
       JsonObject msg = messages.add<JsonObject>();
       msg["role"] = chatHistory[i].role;
       msg["content"] = chatHistory[i].content;
@@ -1125,35 +1395,91 @@ void sendToLLM(String userText, bool isSilent) {
     String requestBody;
     serializeJson(doc, requestBody);
 
-    client.println("POST /openai/v1/chat/completions HTTP/1.1");
-    client.println("Host: api.groq.com");
-    client.println("Authorization: Bearer " + String(GROQ_API_KEY));
-    client.println("Content-Type: application/json");
-    client.println("Connection: close");
-    client.print("Content-Length: ");
-    client.println(requestBody.length());
-    client.println();
-    client.print(requestBody);
-    client.flush();
+    // ─── HỆ THỐNG MULTI-KEY ROTATION & AUTO-FAILOVER (3 GROQ API KEYS) ───
+    static const char* GROQ_API_KEYS[] = {
+      GROQ_KEY_1,
+      GROQ_KEY_2,
+      GROQ_KEY_3
+    };
+    static const int TOTAL_GROQ_KEYS = sizeof(GROQ_API_KEYS) / sizeof(GROQ_API_KEYS[0]);
+    static int current_groq_key_idx = 0;
 
     String payload = "";
-    unsigned long startWait = millis();
-    while ((client.connected() || client.available()) && (millis() - startWait < 15000)) {
-      while (client.available()) {
-        payload += (char)client.read();
-        startWait = millis();
+    bool requestSuccess = false;
+
+    for (int attempt = 0; attempt < TOTAL_GROQ_KEYS; attempt++) {
+      const char* activeApiKey = GROQ_API_KEYS[current_groq_key_idx];
+      Serial.printf("🧠 [Groq LLM Engine] Đang kết nối Key #%d (%s)... (Model: openai/gpt-oss-20b)\n", 
+                    current_groq_key_idx + 1, String(activeApiKey).substring(0, 10).c_str());
+
+      WiFiClientSecure client;
+      client.setInsecure();
+      client.setTimeout(12000);
+      client.setHandshakeTimeout(6);
+
+      if (!client.connect("api.groq.com", 443)) {
+        Serial.printf("⚠️ [Groq Connect Fail] Không kết nối được Key #%d (Free Heap: %u) -> Tự động chuyển Key tiếp theo...\n", 
+                      current_groq_key_idx + 1, ESP.getFreeHeap());
+        current_groq_key_idx = (current_groq_key_idx + 1) % TOTAL_GROQ_KEYS;
+        vTaskDelay(pdMS_TO_TICKS(100));
+        continue;
       }
-      if (payload.indexOf("\"choices\"") != -1 && payload.indexOf("}]") != -1) {
-        int jStart = payload.indexOf('{');
-        int jEnd = payload.lastIndexOf('}');
-        if (jStart != -1 && jEnd != -1 && jEnd > jStart) {
-          payload = payload.substring(jStart, jEnd + 1);
-          break;
+
+      client.println("POST /openai/v1/chat/completions HTTP/1.1");
+      client.println("Host: api.groq.com");
+      client.println("User-Agent: ESP32_SmartHome_AI/1.0");
+      client.println("Authorization: Bearer " + String(activeApiKey));
+      client.println("Content-Type: application/json");
+      client.println("Connection: close");
+      client.print("Content-Length: ");
+      client.println(requestBody.length());
+      client.println();
+      client.print(requestBody);
+      client.flush();
+
+      payload = "";
+      unsigned long startWait = millis();
+      while ((client.connected() || client.available()) && (millis() - startWait < 15000)) {
+        while (client.available()) {
+          payload += (char)client.read();
+          startWait = millis();
         }
+        if (payload.indexOf("\"choices\"") != -1 && payload.indexOf("}]") != -1) {
+          int jStart = payload.indexOf('{');
+          int jEnd = payload.lastIndexOf('}');
+          if (jStart != -1 && jEnd != -1 && jEnd > jStart) {
+            payload = payload.substring(jStart, jEnd + 1);
+            break;
+          }
+        }
+        vTaskDelay(pdMS_TO_TICKS(15));
       }
-      vTaskDelay(pdMS_TO_TICKS(15));
+      client.stop();
+
+      // Kiểm tra nếu Key hiện tại bị dính lỗi 429 Too Many Requests -> Chuyển ngay Key khác
+      if (payload.indexOf("429 Too Many Requests") != -1 || (payload.indexOf("\"error\"") != -1 && payload.indexOf("rate_limit") != -1)) {
+        Serial.printf("⚠️ [Groq Rate Limit 429] Key #%d bị quá tải -> Tự động xoay sang Key #%d ngay lập tức!\n", 
+                      current_groq_key_idx + 1, ((current_groq_key_idx + 1) % TOTAL_GROQ_KEYS) + 1);
+        current_groq_key_idx = (current_groq_key_idx + 1) % TOTAL_GROQ_KEYS;
+        vTaskDelay(pdMS_TO_TICKS(50));
+        continue;
+      }
+
+      if (payload.length() > 0 && payload.indexOf("\"choices\"") != -1) {
+        requestSuccess = true;
+        // Luân chuyển đều tải cho câu thoại tiếp theo
+        current_groq_key_idx = (current_groq_key_idx + 1) % TOTAL_GROQ_KEYS;
+        break;
+      }
     }
-    client.stop();
+
+    if (!requestSuccess) {
+      Serial.println("❌ [Groq LLM Fail] Cả 3 Key đều bận. Phản hồi câu trả lời thông minh...");
+      if (!isSilent) {
+        playTTS("Dạ bạn nói nhanh quá em chưa kịp nghĩ, bạn hỏi lại em một lần nữa nhé!");
+      }
+      return;
+    }
 
     if (payload.length() > 0 && payload.indexOf("\"choices\"") != -1) {
       vTaskDelay(pdMS_TO_TICKS(15)); // Nhường CPU cho IDLE0
@@ -1322,18 +1648,17 @@ void sendToLLM(String userText, bool isSilent) {
             irrecv.disableIRIn();
           }
           stopMusicScreen();
-          showMainScreen();
-          setAIFaceState(AI_STATE_IDLE);
-          setLedMode(0);
-          Serial.println("📱 AI đã chuyển về màn hình chính Dashboard!");
+          pendingReturnToMain = true; // 👉 ĐẶT CỜ CHUYỂN VỀ MÀN HÌNH CHÍNH SAU KHI NÓI XONG
+          pendingReturnToRemote = false;
+          Serial.println("📱 AI đã đặt cờ chuyển về màn hình chính Dashboard sau khi nói xong!");
         }
         else if (actStr == "goto_remote_screen") {
           if (audio.isRunning()) audio.stopSong();
           is_ir_learning_mode = true;
           irrecv.enableIRIn();
-          showIrScreen();
-          updateIrScreen(selected_ir_idx, typeToString(learned_ir[selected_ir_idx].type), String((uint32_t)(learned_ir[selected_ir_idx].value & 0xFFFFFFFF), HEX));
-          Serial.println("📱 AI đã chuyển sang màn hình Remote Học Lệnh!");
+          pendingReturnToRemote = true; // 👉 ĐẶT CỜ CHUYỂN VỀ MÀN HÌNH REMOTE SAU KHI NÓI XONG
+          pendingReturnToMain = false;
+          Serial.println("📱 AI đã đặt cờ chuyển sang màn hình Remote Học Lệnh sau khi nói xong!");
         }
         else if (actStr == "set_fan") {
           extern LearnedIR learned_ir[];
@@ -1441,6 +1766,7 @@ void aiWorkerTask(void *pvParameters) {
     if (xQueueReceive(aiWorkQueue, &item, portMAX_DELAY) == pdTRUE) {
       if (item.type == AI_WORK_AUDIO) {
         if (item.audioData != NULL && item.audioSize > 0) {
+          Serial.printf("📥 [AI Worker] Bắt đầu xử lý %d bytes âm thanh...\n", item.audioSize);
           processAudioAI(item.audioData, item.audioSize);
         }
       } else if (item.type == AI_WORK_TEXT) {
@@ -1476,20 +1802,20 @@ void setupAiTask() {
     aiWorkQueue = xQueueCreate(4, sizeof(AiWorkItem));
   }
   if (aiWorkerTaskHandle == NULL) {
-    // Tạo Task chạy riêng biệt trên Core 0, Priority 1, Stack 12288 bytes trong SRAM
+    // Cấp phát Stack 10240 bytes (10KB) trong Internal SRAM để an toàn tuyệt đối khi ghi Flash NVS / Preferences (không bao giờ crash Cache Disabled)
     BaseType_t res = xTaskCreatePinnedToCore(
       aiWorkerTask,
       "aiWorkerTask",
-      12288,
+      10240,
       NULL,
-      1,
+      3,
       &aiWorkerTaskHandle,
       0
     );
     if (res != pdPASS) {
       Serial.printf("❌ [AI Task] Lỗi tạo aiWorkerTask (Mã lỗi: %d)!\n", res);
     } else {
-      Serial.println("✅ [AI Task] Đã khởi tạo AI Worker Task chạy độc lập trên Core 0 thành công!");
+      Serial.println("✅ [AI Task] Đã khởi tạo AI Worker Task (Internal SRAM 10KB, Flash Safe) thành công!");
     }
   }
 }

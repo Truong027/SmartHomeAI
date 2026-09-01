@@ -11,6 +11,8 @@ extern bool isWaitingFollowupCommand;
 extern String pendingTtsUrl;
 extern String pendingTtsSpeech;
 extern bool hasPendingTts;
+extern volatile bool pendingReturnToMain;
+extern volatile bool pendingReturnToRemote;
 
 void setupAiTask();
 void triggerAiAudioProcess(uint8_t* audioData, size_t size);

@@ -120,6 +120,8 @@ extern String pendingSongUrl;
 extern String pendingSongTitle;
 extern String foundSongDisplay;
 extern String searchMusicUrl(String songTitle);
+extern volatile bool pendingReturnToMain;
+extern volatile bool pendingReturnToRemote;
 
 void setupButtons() {
   updateBootScreen(5);
@@ -278,6 +280,8 @@ void handleTouch() { // Xử lý nút cứng với thuật toán chống rung ch
               isMusicMode = false;
               wasAudioRunning = false;
               isAiBusy = false;
+              pendingReturnToMain = false;
+              pendingReturnToRemote = false;
               if (is_ir_learning_mode) {
                 is_ir_learning_mode = false;
                 irrecv.disableIRIn(); // Tắt ngắt thu hồng ngoại khi thoát
@@ -305,6 +309,8 @@ void handleTouch() { // Xử lý nút cứng với thuật toán chống rung ch
               isMusicMode = false;
               wasAudioRunning = false;
               isAiBusy = false;
+              pendingReturnToMain = false;
+              pendingReturnToRemote = false;
 
               // Chuyển sang màn hình AI
               if (screen_ai) {
@@ -369,14 +375,17 @@ void audio_info(const char *info) {
 
 void audio_eof_mp3(const char *info) {
   Serial.printf("[Audio EOF MP3] %s\n", info);
+  audio_just_finished = true;
 }
 
 void audio_eof_speech(const char *info) {
   Serial.printf("[Audio EOF Speech] %s\n", info);
+  audio_just_finished = true;
 }
 
 void audio_eof_stream(const char *info) {
   Serial.printf("[Audio EOF Stream] %s\n", info);
+  audio_just_finished = true;
 }
 
 // Hàm loại bỏ dấu Tiếng Việt
@@ -421,14 +430,16 @@ String removeVietnameseAccents(String text) {
 
 void fetchWeatherInternal() {
   if (WiFi.status() == WL_CONNECTED) {
+    WiFiClient client;
     HTTPClient http;
+    http.setTimeout(8000);
     // URL được thiết lập từ config.h, thêm lang=vi để lấy tiếng Việt
     String url = String(weatherApiUrl) + "?lat=" + String(weatherLat, 6) + 
                  "&lon=" + String(weatherLon, 6) + 
                  "&units=metric&lang=vi&appid=" + String(weatherApiKey);
                  
     Serial.println("🌐 Đang tải thời tiết từ OpenWeatherMap (Background Core 0)...");
-    http.begin(url);
+    http.begin(client, url);
     int httpCode = http.GET();
     
     if (httpCode == 200) {
@@ -450,6 +461,7 @@ void fetchWeatherInternal() {
       Serial.printf("❌ Lỗi gọi API OWM: %d\n", httpCode);
     }
     http.end();
+    client.stop();
   }
 }
 
@@ -815,63 +827,55 @@ void loop() {
     }
   }
 
-  // 0. Xử lý kết nối phát TTS an toàn 100% trong Main Loop (Chống xung đột đa luồng)
+  // 0. Xử lý kết nối phát TTS an toàn 100% trong Main Loop (Chống xung đột đa luồng & BearSSL Crash)
   if (hasPendingTts) {
     hasPendingTts = false;
     if (audio.isRunning()) {
       audio.stopSong();
-      delay(40);
+      delay(30);
     }
     ttsAttemptTime = millis();
     wasAudioRunning = false;
-    if (pendingTtsSpeech.length() > 0) {
+    if (pendingTtsUrl.length() > 0) {
+      String urlToPlay = pendingTtsUrl;
+      pendingTtsUrl = "";
+      pendingTtsSpeech = "";
+      Serial.println("🔊 [Audio Stream] Bắt đầu phát TTS URL: " + urlToPlay);
+      audio.connecttohost(urlToPlay.c_str());
+    } else if (pendingTtsSpeech.length() > 0) {
       String speechText = pendingTtsSpeech;
       pendingTtsSpeech = "";
       pendingTtsUrl = "";
-      Serial.println("🗣️ [TTS Engine] Bắt đầu phát Speech (m_f_tts = true): " + speechText);
+      Serial.println("🗣️ [TTS Engine] Bắt đầu phát Speech: " + speechText);
       audio.connecttospeech(speechText.c_str(), "vi");
-    } else if (pendingTtsUrl.length() > 0) {
-      String urlToPlay = pendingTtsUrl;
-      pendingTtsUrl = "";
-      Serial.println("🔗 [TTS Engine] Bắt đầu phát URL Stream: " + urlToPlay);
-      audio.connecttohost(urlToPlay.c_str());
     }
+  }
+
+  // 0.1. Xử lý tự động kích hoạt stream nhạc ngay khi Core 0 Background Worker tìm thấy link
+  if (pendingSongUrl.length() > 0 && !audio.isRunning() && !hasPendingTts) {
+    String urlToPlay = pendingSongUrl;
+    pendingSongUrl = "";
+    String titleToShow = foundSongDisplay.length() > 0 ? foundSongDisplay : (pendingSongTitle.length() > 0 ? pendingSongTitle : "Đang phát nhạc");
+    pendingSongTitle = "";
+    Serial.println("🎵 [Music Trigger] Bắt đầu phát nhạc MP3 Stream: " + urlToPlay);
+    showMusicScreen(titleToShow);
+    isMusicMode = true;
+    songConnectTime = millis();
+    wasAudioRunning = false;
+    ttsAttemptTime = 0;
+    audio.connecttohost(urlToPlay.c_str());
   }
   
   bool currentAudioRunning = audio.isRunning();
-  
-  // Biến Watchdog chống kẹt (stall) luồng âm thanh
-  static uint32_t lastFilePos = 0;
-  static unsigned long lastPosChangeTime = 0;
-  
   static unsigned long notRunningStartTime = 0;
   
   if (currentAudioRunning) {
-    if (!wasAudioRunning) {
-       lastFilePos = audio.getAudioFilePosition();
-       lastPosChangeTime = millis();
-    }
     wasAudioRunning = true;
     notRunningStartTime = 0;
     idleStartTime = 0;
     ttsAttemptTime = 0;
-    
-    // Theo dõi tiến độ giải mã âm thanh
-    uint32_t currentPos = audio.getAudioFilePosition();
-    if (currentPos != lastFilePos) {
-       lastFilePos = currentPos;
-       lastPosChangeTime = millis();
-    } else {
-       // Nếu sau 8 giây mà luồng không tải/giải mã thêm được byte nào => Kẹt mạng hoặc EOF ảo
-       if (millis() - lastPosChangeTime > 8000) {
-          Serial.println("❌ CẢNH BÁO: Luồng âm thanh không nhận thêm byte > 8s. Ép dừng!");
-          audio.stopSong();
-          currentAudioRunning = false;
-          audio_just_finished = true;
-       }
-    }
   } else {
-    // Nếu audio vừa kết thúc (TTS hoặc nhạc xong), đợi 300ms xác nhận đã kết thúc thực sự
+    // Nếu audio vừa kết thúc (TTS hoặc nhạc xong), đợi 350ms xác nhận đã kết thúc thực sự
     if (wasAudioRunning) {
       if (notRunningStartTime == 0) notRunningStartTime = millis();
       if (millis() - notRunningStartTime >= 350) {
@@ -910,6 +914,7 @@ void loop() {
       audio.connecttohost(urlToPlay.c_str());
     } else {
       isMusicMode = false;
+      audio.stopSong(); // Giải phóng hoàn toàn socket và heap của Audio stream
       stopMusicScreen();
       extern bool isStreamingAiText;
       isStreamingAiText = false; // Ngắt hoạt họa chữ chạy của câu nói cũ
@@ -926,14 +931,43 @@ void loop() {
         setLedMode(2); // LED Mode 2: Cyan Listening
         startRecording(true); // Mở mic nhận câu lệnh trực tiếp (không bắt buộc lặp lại từ khóa Wake-Word)
         Serial.println("🎙️ [XiaoZhi Followup] Đã chào xong, tự động mở mic thu âm câu lệnh tiếp theo...");
-      } else {
-        setAIFaceState(AI_STATE_IDLE);
-        setLedMode(0);
+      } else if (pendingReturnToMain) {
+        pendingReturnToMain = false;
+        pendingReturnToRemote = false;
         extern bool isAiBusy;
         isAiBusy = false;
         idleStartTime = millis();
+        showMainScreen();
+        setAIFaceState(AI_STATE_IDLE);
+        setLedMode(0);
         uiUpdatePending = true;
-        Serial.println("✅ Âm thanh/Nhạc đã kết thúc, quay về màn hình AI sẵn sàng (IDLE)!");
+        Serial.println("📱 [Screen Switch] TTS đã nói xong -> Đã tự động chuyển về Màn hình chính Dashboard thành công!");
+      } else if (pendingReturnToRemote) {
+        pendingReturnToRemote = false;
+        pendingReturnToMain = false;
+        extern bool isAiBusy;
+        isAiBusy = false;
+        idleStartTime = millis();
+        showIrScreen();
+        updateIrScreen(selected_ir_idx, typeToString(learned_ir[selected_ir_idx].type), String((uint32_t)(learned_ir[selected_ir_idx].value & 0xFFFFFFFF), HEX));
+        setLedMode(0);
+        uiUpdatePending = true;
+        Serial.println("📱 [Screen Switch] TTS đã nói xong -> Đã tự động chuyển sang Màn hình Remote Học Lệnh thành công!");
+      } else {
+        stopMusicScreen();
+        requestScreen(SCREEN_AI);
+        
+        // 👉 TỰ ĐỘNG KÍCH HOẠT HỘI THOẠI ĐA TẦNG LIÊN TỤC (CONTINUOUS MULTI-TURN DIALOGUE)
+        extern bool isAiBusy;
+        isAiBusy = false;
+        setAIFaceState(AI_STATE_LISTENING);
+        setLedMode(2); // LED Mode 2: Cyan Listening (Thở nhẹ báo hiệu đang chờ câu hỏi tiếp theo)
+        extern void setAIChatDialogue(String userText, String aiText);
+        setAIChatDialogue("Dang nghe tiep...", "...");
+        uiUpdatePending = true;
+        
+        startRecording(true); // Mở mic thu âm câu hỏi tiếp nối trong 4.5s (không cần nói lại "Hi Nori")
+        Serial.println("🎙️ [Continuous Dialogue] Đã nói xong -> Tự động mở Mic lắng nghe câu hỏi tiếp theo trong 4.5s...");
       }
     }
   }
@@ -968,6 +1002,16 @@ void loop() {
     json.set("outWindSpd", owmWind);
     json.set("outDesc", owmDesc);
     json.set("aiAdvice", ai_prediction_short);
+    json.set("time", hhmmText);
+    json.set("dateSolar", dateSolar);
+    json.set("dateLunar", dateLunar);
+    json.set("relay1", relay1);
+    json.set("relay2", relay2);
+    json.set("settings/acPower", daikin_power);
+    json.set("settings/acTemp", (int)daikin_temp);
+    json.set("settings/acFan", (int)daikin_fan);
+    json.set("settings/ledBrightness", ledBrightness);
+    json.set("settings/audioVolume", (int)audioVolume);
     time_t nowTime;
     time(&nowTime);
     json.set("last_seen", (int)nowTime);
@@ -1012,6 +1056,8 @@ void loop() {
   last_tick = now_ms;
   if (tick > 0) lv_tick_inc(tick); 
   
+  extern void handlePendingScreenSwitch();
+  handlePendingScreenSwitch();
   lv_timer_handler();
   processAudioLoop();
   yield();

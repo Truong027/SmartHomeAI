@@ -3,10 +3,15 @@
  * Hallmark Atmospheric Workbench Controller
  */
 
-// 1. Firebase Realtime Configuration
+// 1. Firebase Realtime Configuration (Đầy đủ cấu hình để xác thực hoạt động 100%)
 const firebaseConfig = {
     apiKey: "AIzaSyDND5fdH_tduPrnFHPsAo2Ggxzu1zJk18o",
+    authDomain: "esp32app-30335.firebaseapp.com",
     databaseURL: "https://esp32app-30335-default-rtdb.asia-southeast1.firebasedatabase.app/",
+    projectId: "esp32app-30335",
+    storageBucket: "esp32app-30335.appspot.com",
+    messagingSenderId: "30335",
+    appId: "1:30335:web:esp32hub"
 };
 
 // Initialize Firebase
@@ -32,8 +37,14 @@ const webIndoorTemp = document.getElementById('web-indoor-temp');
 const webIndoorHum = document.getElementById('web-indoor-hum');
 const webOutTemp = document.getElementById('web-out-temp');
 const webOutDesc = document.getElementById('web-out-desc');
+const webPressure = document.getElementById('web-pressure');
+const webOutHum = document.getElementById('web-out-hum');
+const webOutWind = document.getElementById('web-out-wind');
 const webAiAdvice = document.getElementById('web-ai-advice');
 const liveTimeEl = document.getElementById('live-time');
+const rtcTimeEl = document.getElementById('rtc-time');
+const rtcDateSolarEl = document.getElementById('rtc-date-solar');
+const rtcDateLunarEl = document.getElementById('rtc-date-lunar');
 
 // Device Controls
 const ledSlider = document.getElementById('led-slider');
@@ -86,10 +97,12 @@ async function initApp() {
         if (auth) {
             try {
                 await auth.signInWithEmailAndPassword("admin@esp32.local", "123456");
+                console.log("✅ Firebase Auth: Đăng nhập thành công với tài khoản admin@esp32.local");
             } catch (authErr) {
                 console.warn("Email auth fallback:", authErr.message);
                 try {
                     await auth.signInAnonymously();
+                    console.log("✅ Firebase Auth: Đăng nhập ẩn danh thành công");
                 } catch (anonErr) {
                     console.warn("Anonymous auth fallback:", anonErr.message);
                 }
@@ -371,7 +384,14 @@ function setupSensorsAndWeather() {
     // 1. Weather Data
     db.ref('/ESP32_AI_Hub/outTemp').on('value', snap => {
         if (snap.val() !== null && webOutTemp) {
-            webOutTemp.innerText = parseFloat(snap.val()).toFixed(1) + '°C';
+            const val = parseFloat(snap.val());
+            webOutTemp.innerText = val.toFixed(1) + '°C';
+            const badge = document.getElementById('badge-out-temp');
+            if (badge) {
+                if (val < 22) badge.innerText = 'Se mát';
+                else if (val <= 30) badge.innerText = 'Dễ chịu';
+                else badge.innerText = 'Nắng nóng';
+            }
         }
     });
 
@@ -392,6 +412,13 @@ function setupSensorsAndWeather() {
         if (snap.val() !== null) {
             const val = parseFloat(snap.val());
             if (webIndoorTemp) webIndoorTemp.innerText = val.toFixed(1) + '°C';
+            const badge = document.getElementById('badge-indoor-temp');
+            if (badge) {
+                if (val < 24) badge.innerText = 'Se lạnh';
+                else if (val <= 28) badge.innerText = 'Lý tưởng';
+                else if (val <= 32) badge.innerText = 'Hơi ấm';
+                else badge.innerText = 'Nóng';
+            }
             updateChartData(0, val);
         }
     });
@@ -400,7 +427,85 @@ function setupSensorsAndWeather() {
         if (snap.val() !== null) {
             const val = parseFloat(snap.val());
             if (webIndoorHum) webIndoorHum.innerText = val.toFixed(0) + '%';
+            const badge = document.getElementById('badge-indoor-hum');
+            if (badge) {
+                if (val < 45) badge.innerText = 'Hơi khô';
+                else if (val <= 70) badge.innerText = 'Lý tưởng';
+                else badge.innerText = 'Ẩm cao';
+            }
             updateChartData(1, val);
+        }
+    });
+
+    // 3. Pressure, Outdoor Humidity, Wind Speed (Robust multi-key fallback)
+    const updatePressureUI = (val) => {
+        if (webPressure) webPressure.innerText = parseFloat(val).toFixed(0) + ' hPa';
+        const badge = document.getElementById('badge-pres');
+        if (badge) {
+            const p = parseFloat(val);
+            if (p < 1000) badge.innerText = 'Áp thấp';
+            else if (p <= 1015) badge.innerText = 'Ổn định';
+            else badge.innerText = 'Áp cao';
+        }
+    };
+    db.ref('/ESP32_AI_Hub/pressure').on('value', snap => {
+        if (snap.val() !== null) updatePressureUI(snap.val());
+    });
+    db.ref('/ESP32_AI_Hub/sensors/pressure').on('value', snap => {
+        if (snap.val() !== null) updatePressureUI(snap.val());
+    });
+
+    const updateOutHumUI = (val) => {
+        if (webOutHum) webOutHum.innerText = parseFloat(val).toFixed(0) + '%';
+        const badge = document.getElementById('badge-out-hum');
+        if (badge) {
+            const h = parseFloat(val);
+            if (h < 50) badge.innerText = 'Khô ráo';
+            else if (h <= 80) badge.innerText = 'Bình thường';
+            else badge.innerText = 'Ẩm ướt';
+        }
+    };
+    db.ref('/ESP32_AI_Hub/outHum').on('value', snap => {
+        if (snap.val() !== null) updateOutHumUI(snap.val());
+    });
+    db.ref('/ESP32_AI_Hub/outdoor_hum').on('value', snap => {
+        if (snap.val() !== null) updateOutHumUI(snap.val());
+    });
+
+    const updateOutWindUI = (val) => {
+        if (webOutWind) webOutWind.innerText = parseFloat(val).toFixed(1) + ' m/s';
+        const badge = document.getElementById('badge-wind');
+        if (badge) {
+            const w = parseFloat(val);
+            if (w < 1.5) badge.innerText = 'Gió lặng';
+            else if (w <= 3.3) badge.innerText = 'Gió nhẹ';
+            else if (w <= 5.5) badge.innerText = 'Gió vừa';
+            else badge.innerText = 'Gió mạnh';
+        }
+    };
+    db.ref('/ESP32_AI_Hub/outWindSpd').on('value', snap => {
+        if (snap.val() !== null) updateOutWindUI(snap.val());
+    });
+    db.ref('/ESP32_AI_Hub/wind_speed').on('value', snap => {
+        if (snap.val() !== null) updateOutWindUI(snap.val());
+    });
+
+    // 4. RTC Time & Date from ESP32
+    db.ref('/ESP32_AI_Hub/time').on('value', snap => {
+        if (snap.val() && rtcTimeEl) {
+            rtcTimeEl.innerText = snap.val();
+        }
+    });
+
+    db.ref('/ESP32_AI_Hub/dateSolar').on('value', snap => {
+        if (snap.val() && rtcDateSolarEl) {
+            rtcDateSolarEl.innerText = snap.val();
+        }
+    });
+
+    db.ref('/ESP32_AI_Hub/dateLunar').on('value', snap => {
+        if (snap.val() && rtcDateLunarEl) {
+            rtcDateLunarEl.innerText = snap.val();
         }
     });
 

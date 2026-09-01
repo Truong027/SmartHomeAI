@@ -6,8 +6,8 @@
 #include <lvgl.h>
 #include "config.h"
 
-// Bộ nhớ đệm tối ưu cho màn hình 160x128 (32 dòng quét = 10KB SRAM siêu tốc)
-#define DRAW_BUF_SIZE (SCREEN_W * 32 * 2) 
+// Bộ nhớ đệm tối ưu cho màn hình 160x128 (16 dòng quét = 5KB SRAM siêu tốc)
+#define DRAW_BUF_SIZE (SCREEN_W * 16 * 2) 
 
 // Đối tượng điều khiển màn hình
 extern TFT_eSPI *tft;
@@ -23,6 +23,7 @@ extern String dateLunar;
 extern float indoorTemp;
 extern float indoorHum;
 extern float indoorPres;
+extern uint8_t currentSecond;
 extern float owmTemp;
 extern float owmHum;
 extern float owmWind;
@@ -91,5 +92,14 @@ extern lv_obj_t * screen_music;
 void setupMusicScreen();
 void showMusicScreen(String songTitle);
 void stopMusicScreen();
+
+enum ScreenType {
+  SCREEN_NONE = 0,
+  SCREEN_MAIN,
+  SCREEN_AI,
+  SCREEN_MUSIC,
+  SCREEN_IR
+};
+void requestScreen(ScreenType scr);
 
 #endif // UI_LVGL_H
