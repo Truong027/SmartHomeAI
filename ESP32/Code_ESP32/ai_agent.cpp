@@ -250,11 +250,11 @@ void playTTS(String text, bool isPromptOnly, String customTtsUrl) {
     pendingTtsSpeech = "";
     Serial.printf("🔗 URL TTS tùy chỉnh: %s\n", customTtsUrl.c_str());
   } else {
-    // Sử dụng HTTP thuần Port 80 (chống 100% lỗi BearSSL mConnectSSL / BR_SSL_SENDAPP, phát siêu tốc không tốn SSL RAM)
+    // Sử dụng Vercel Cloud TTS Proxy (Ghép đa chunk MP3 mượt mà, tốc độ cao, không lỗi redirect)
     String encodedText = urlEncode(ttsText);
-    pendingTtsUrl = "http://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=vi&q=" + encodedText;
+    pendingTtsUrl = "https://vercel-backend-woad-seven.vercel.app/api/tts?text=" + encodedText;
     pendingTtsSpeech = "";
-    Serial.println("🔊 [HTTP TTS Stream] Bàn giao URL cho Audio Engine: " + pendingTtsUrl);
+    Serial.println("🔊 [Vercel Cloud TTS] Bàn giao URL cho Audio Engine: " + pendingTtsUrl);
   }
 
   // Bàn giao cho Main Loop trên Core 1 phát TTS an toàn
