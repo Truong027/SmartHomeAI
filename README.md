@@ -170,5 +170,21 @@ Nhấn **Upload** để nạp firmware vào ESP32-S3.
 
 ---
 
+## 🚀 TỰ ĐỘNG HÓA CI/CD (GITHUB ACTIONS PIPELINE)
+
+Dự án được tích hợp sẵn luồng **CI/CD tự động** (`.github/workflows/ci_cd.yml`):
+- **Tự động kiểm tra cú pháp**: Chạy test kiểm tra toàn bộ API Node.js và cấu trúc file Firmware ESP32 mỗi khi tạo Pull Request hoặc Push code.
+- **Tự động triển khai Vercel Backend**: Cập nhật Production Serverless API ngay khi code mới được merge vào nhánh `main`.
+- **Tự động triển khai Firebase Hosting**: Build và đưa giao diện Web App lên hosting trực tiếp.
+
+### 🔑 Cấu hình GitHub Secrets (Dành cho Tự động Deploy):
+Trong repo GitHub, vào **Settings > Secrets and variables > Actions > New repository secret** và thêm:
+- `VERCEL_TOKEN`: Token tài khoản Vercel của bạn.
+- `VERCEL_ORG_ID`: Org ID của Vercel Project.
+- `VERCEL_PROJECT_ID`: Project ID của Vercel Project.
+- `FIREBASE_SERVICE_ACCOUNT`: Service Account JSON key từ Firebase Console.
+
+---
+
 ## 📄 GIẤY PHÉP (LICENSE)
 Dự án được phân phối dưới giấy phép mã nguồn mở **MIT License**. Bạn được toàn quyền sử dụng, tùy biến và phát triển tiếp cho mục đích cá nhân hoặc thương mại.

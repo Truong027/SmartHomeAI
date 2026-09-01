@@ -1,0 +1,112 @@
+name: 🚀 Nori Smart Home CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # =========================================================================
+  # JOB 1: TEST & VALIDATE BACKEND (NODE.JS)
+  # =========================================================================
+  test_backend:
+    name: 🧪 Test & Validate Backend
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: 📦 Install Dependencies
+        working-directory: vercel_backend
+        run: |
+          if [ -f package.json ]; then
+            npm install --production=false
+          fi
+
+      - name: 🔍 Syntax & Structure Check
+        working-directory: vercel_backend
+        run: |
+          node -c api/music.js
+          node -c api/search.js
+          node -c api/stt.js
+          node -c api/tts.js
+          node -c api/weather.js
+          echo "✅ Tất cả các API Endpoint đã vượt qua kiểm tra cú pháp thành công!"
+
+  # =========================================================================
+  # JOB 2: DEPLOY VERCEL SERVERLESS BACKEND
+  # =========================================================================
+  deploy_vercel:
+    name: ⚡ Deploy Vercel Backend
+    needs: test_backend
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🚀 Deploy to Vercel Production
+        uses: amondnet/vercel-action@v25
+        if: "${{ env.VERCEL_TOKEN != '' }}"
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          working-directory: ./vercel_backend
+          vercel-args: '--prod'
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+
+  # =========================================================================
+  # JOB 3: DEPLOY FIREBASE HOSTING WEB APP
+  # =========================================================================
+  deploy_firebase:
+    name: 🔥 Deploy Firebase Web App
+    needs: test_backend
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🚀 Deploy to Firebase Hosting
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        if: "${{ env.FIREBASE_SERVICE_ACCOUNT != '' }}"
+        with:
+          repoToken: '${{ secrets.GITHUB_TOKEN }}'
+          firebaseServiceAccount: '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}'
+          channelId: live
+          projectId: esp32app-30335
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+
+  # =========================================================================
+  # JOB 4: VALIDATE ESP32 FIRMWARE STRUCTURE
+  # =========================================================================
+  build_firmware_check:
+    name: 🛠️ Validate ESP32 Source
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🔍 Validate Arduino Source Files
+        run: |
+          test -f ESP32/Code_ESP32/Code_ESP32.ino || (echo "Missing Code_ESP32.ino" && exit 1)
+          test -f ESP32/Code_ESP32/ai_agent.cpp || (echo "Missing ai_agent.cpp" && exit 1)
+          test -f ESP32/Code_ESP32/hw_audio.cpp || (echo "Missing hw_audio.cpp" && exit 1)
+          test -f ESP32/Code_ESP32/ui_lvgl.cpp || (echo "Missing ui_lvgl.cpp" && exit 1)
+          test -f ESP32/Code_ESP32/config.example.h || (echo "Missing config.example.h" && exit 1)
+          test -f ESP32/Code_ESP32/partitions.csv || (echo "Missing partitions.csv" && exit 1)
+          echo "✅ Cấu trúc mã nguồn Firmware ESP32-S3 hoàn chỉnh 100%!"
